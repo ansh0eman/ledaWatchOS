@@ -1,0 +1,15 @@
+.DS_Store
+
+# Xcode user settings
+xcuserdata/
+
+# Build output
+DerivedData/
+build/
+
+# Swift Package Manager
+.swiftpm/
+
+# Secrets
+.env
+*.key
