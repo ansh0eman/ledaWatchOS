@@ -103,6 +103,13 @@ function askLeda(transcript, socket) {
 wss.on("connection", (socket) => {
   console.log("Apple Watch connected!");
 
+  socket.send(
+    JSON.stringify({
+      type: "CONNECTED",
+      text: "",
+    }),
+  );
+
   audioChunks = [];
 
   socket.on("message", (data, isBinary) => {

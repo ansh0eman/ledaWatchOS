@@ -21,7 +21,16 @@ enum LedaState {
     case speaking
 }
 
+enum SocketState {
+    case disconnected
+    case connecting
+    case connected
+    case failed
+}
+
 struct ContentView: View {
+
+    private let bridgeURL = URL(string: "ws://Anshumans-MacBook-Air.local:8765")!
     
     @State private var ledaState: LedaState = .idle
     @State private var rotation = 0.0
@@ -32,6 +41,8 @@ struct ContentView: View {
     @State private var didSendAudioFormat = false
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var speechDelegate = SpeechDelegate()
+    @State private var isRecording = false
+    @State private var socketState: SocketState = .disconnected
     
     var omnitrixColor: Color {
         switch ledaState {
@@ -128,20 +139,28 @@ struct ContentView: View {
             
             audioEngine.prepare()
             try audioEngine.start()
+            isRecording = true
 
             print("LEDA microphone LIVE")
 
         } catch {
             print("Audio error:", error)
+            ledaState = .idle
         }
     }
     
     func stopLiveAudio() {
+        guard isRecording else {
+            print("LEDA microphone was not running")
+            return
+        }
+
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
-        
+
+        isRecording = false
         didSendAudioFormat = false
-        
+
         webSocketTask?.send(.string("STOP_AUDIO")) { error in
             if let error {
                 print("STOP_AUDIO send error:", error)
@@ -153,20 +172,27 @@ struct ContentView: View {
     }
     
     func connectToLedaBridge() {
-        let url = URL(string: "ws://192.168.1.5:8765")!
+        if socketState == .connected {
+            if ledaState == .listening && !isRecording {
+                startLiveAudio()
+            }
+            return
+        }
 
-        webSocketTask = URLSession.shared.webSocketTask(with: url)
+        guard socketState != .connecting else {
+            print("Socket state:", socketState)
+            return
+        }
+
+        socketState = .connecting
+
+        let request = URLRequest(url: bridgeURL, timeoutInterval: 8)
+        webSocketTask = URLSession.shared.webSocketTask(with: request)
         webSocketTask?.resume()
-        
+
         receiveFromLeda()
 
-        webSocketTask?.send(.string("Hello from Apple Watch")) { error in
-            if let error = error {
-                print("WebSocket error:", error)
-            } else {
-                print("Message sent to Mac")
-            }
-        }
+        print("Connecting to LEDA bridge...")
     }
     
     func sendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -207,7 +233,18 @@ struct ContentView: View {
                     do {
                         let message = try JSONDecoder()
                             .decode(LedaMessage.self, from: data)
-                        
+
+                        if message.type == "CONNECTED" {
+                            Task { @MainActor in
+                                socketState = .connected
+                                print("✅ LEDA bridge connected")
+
+                                if ledaState == .listening && !isRecording {
+                                    startLiveAudio()
+                                }
+                            }
+                        }
+
                         if message.type == "LEDA_REPLY" {
                             Task { @MainActor in
                                 ledaState = .speaking
@@ -234,6 +271,22 @@ struct ContentView: View {
 
             case .failure(let error):
                 print("❌ Receive error:", error)
+
+                Task { @MainActor in
+                    if isRecording {
+                        audioEngine.inputNode.removeTap(onBus: 0)
+                        audioEngine.stop()
+                        isRecording = false
+                        didSendAudioFormat = false
+                    }
+
+                    socketState = .failed
+                    webSocketTask = nil
+
+                    if ledaState == .listening {
+                        ledaState = .idle
+                    }
+                }
             }
         }
     }
@@ -269,11 +322,12 @@ struct ContentView: View {
                     case .idle:
                         ledaState = .listening
                         connectToLedaBridge()
-                        startLiveAudio()
 
                     case .listening:
-                        ledaState = .thinking
-                        stopLiveAudio()
+                        if isRecording {
+                            ledaState = .thinking
+                            stopLiveAudio()
+                        }
 
                     default:
                         break
@@ -283,6 +337,18 @@ struct ContentView: View {
                         scale = 1.0
                     }
                 }
+            }
+
+            if socketState == .connecting {
+                ProgressView()
+                    .controlSize(.mini)
+                    .offset(y: 82)
+            } else if socketState == .failed {
+                Text("Bridge unavailable. Tap to retry.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .offset(y: 82)
             }
         }
     }
