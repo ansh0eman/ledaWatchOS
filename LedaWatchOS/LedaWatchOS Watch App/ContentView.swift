@@ -28,6 +28,25 @@ enum SocketState {
     case failed
 }
 
+struct ClassicAlien: Identifiable {
+    let id: String
+    let name: String
+    let assetName: String
+
+    static let originalTen = [
+        ClassicAlien(id: "heatblast", name: "HEATBLAST", assetName: "AlienHeatblast"),
+        ClassicAlien(id: "wildmutt", name: "WILDMUTT", assetName: "AlienWildmutt"),
+        ClassicAlien(id: "diamondhead", name: "DIAMONDHEAD", assetName: "AlienDiamondhead"),
+        ClassicAlien(id: "xlr8", name: "XLR8", assetName: "AlienXLR8"),
+        ClassicAlien(id: "grey-matter", name: "GREY MATTER", assetName: "AlienGreyMatter"),
+        ClassicAlien(id: "four-arms", name: "FOUR ARMS", assetName: "AlienFourArms"),
+        ClassicAlien(id: "stinkfly", name: "STINKFLY", assetName: "AlienStinkfly"),
+        ClassicAlien(id: "ripjaws", name: "RIPJAWS", assetName: "AlienRipjaws"),
+        ClassicAlien(id: "upgrade", name: "UPGRADE", assetName: "AlienUpgrade"),
+        ClassicAlien(id: "ghostfreak", name: "GHOSTFREAK", assetName: "AlienGhostfreak"),
+    ]
+}
+
 struct ContentView: View {
 
     private let bridgeURL = URL(string: "ws://Anshumans-MacBook-Air.local:8765")!
@@ -44,6 +63,12 @@ struct ContentView: View {
     @State private var isRecording = false
     @State private var socketState: SocketState = .disconnected
     @State private var errorMessage: String?
+    @State private var isChoosingAlien = true
+    @State private var selectedAlienIndex = 0
+
+    private var selectedAlien: ClassicAlien {
+        ClassicAlien.originalTen[selectedAlienIndex]
+    }
     
     var omnitrixColor: Color {
         switch ledaState {
@@ -304,73 +329,307 @@ struct ContentView: View {
             }
         }
     }
+
+    func selectAlien(at index: Int) {
+        selectedAlienIndex = index
+        isChoosingAlien = false
+        errorMessage = nil
+
+        WKInterfaceDevice.current().play(.click)
+        playActivationSound()
+
+        withAnimation(.easeInOut(duration: 0.35)) {
+            scale = 1.18
+            rotation += 180
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            beginConversation()
+
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
+                scale = 1.0
+            }
+        }
+    }
+
+    func beginConversation() {
+        guard ledaState == .idle else {
+            return
+        }
+
+        errorMessage = nil
+        ledaState = .listening
+        connectToLedaBridge()
+    }
+
+    func handleOmnitrixTap() {
+        switch ledaState {
+        case .idle:
+            beginConversation()
+
+        case .listening:
+            if isRecording {
+                ledaState = .thinking
+                stopLiveAudio()
+            }
+
+        default:
+            break
+        }
+    }
+
+    var stateLabel: String {
+        switch ledaState {
+        case .idle:
+            return selectedAlien.name
+        case .listening:
+            return "LISTENING"
+        case .thinking:
+            return "THINKING"
+        case .speaking:
+            return "LEDA"
+        }
+    }
     
     var body: some View {
         ZStack {
-            
             Color.black
-            
+
+            if isChoosingAlien {
+                AlienSelectorView(selectedIndex: $selectedAlienIndex) { index in
+                    selectAlien(at: index)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            } else {
+                ZStack {
+                    Circle()
+                        .stroke(omnitrixColor.opacity(0.35), lineWidth: 14)
+                        .frame(width: 146, height: 146)
+
+                    Circle()
+                        .fill(omnitrixColor)
+                        .frame(width: 128, height: 128)
+
+                    DiamondShape()
+                        .fill(Color.black.opacity(0.9))
+                        .frame(width: 88, height: 112)
+                        .rotationEffect(.degrees(rotation))
+
+                    Image(selectedAlien.assetName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 92, height: 108)
+                        .shadow(color: .black.opacity(0.8), radius: 2, y: 2)
+                }
+                .scaleEffect(scale)
+                .contentShape(Circle())
+                .onTapGesture {
+                    handleOmnitrixTap()
+                }
+                .transition(.opacity.combined(with: .scale(scale: 1.12)))
+
+                VStack {
+                    HStack {
+                        Button {
+                            guard ledaState == .idle else {
+                                return
+                            }
+
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                isChoosingAlien = true
+                            }
+                        } label: {
+                            Image(systemName: "circle.grid.3x3.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.green)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(ledaState != .idle)
+                        .opacity(ledaState == .idle ? 1 : 0.25)
+
+                        Spacer()
+                    }
+
+                    Spacer()
+
+                    Text(stateLabel)
+                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .foregroundStyle(omnitrixColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+
+                if socketState == .connecting {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .offset(y: 78)
+                } else if socketState == .failed {
+                    Text("Bridge unavailable. Tap to retry.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .offset(y: 78)
+                } else if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .offset(y: 78)
+                }
+            }
+        }
+    }
+}
+
+struct AlienSelectorView: View {
+    @Binding var selectedIndex: Int
+    let onSelect: (Int) -> Void
+
+    @State private var crownPosition = 0.0
+    @State private var isScanning = false
+    @FocusState private var isCrownFocused: Bool
+
+    private var selectedAlien: ClassicAlien {
+        ClassicAlien.originalTen[selectedIndex]
+    }
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text("SELECT ALIEN")
+                .font(.system(size: 11, weight: .black, design: .rounded))
+                .foregroundStyle(.green)
+                .tracking(1.2)
+
             ZStack {
                 Circle()
-                    .fill(omnitrixColor)
-                    .frame(width: 135, height: 135)
-                
-                HourglassShape()
-                    .fill(Color.black)
-                    .frame(width: 75, height: 75)
-            }
-            .scaleEffect(scale)
-            .rotationEffect(.degrees(rotation))
-            .onTapGesture {
-                
-                //            WKInterfaceDevice.current().play(.start)
-                playActivationSound()
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    scale = 1.25
-                    rotation += 180
-                }
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    switch ledaState {
+                    .fill(Color.green.opacity(0.07))
+                    .frame(width: 154, height: 154)
 
-                    case .idle:
-                        errorMessage = nil
-                        ledaState = .listening
-                        connectToLedaBridge()
+                Circle()
+                    .stroke(
+                        AngularGradient(
+                            colors: [.green, .black, .green, .black, .green],
+                            center: .center
+                        ),
+                        lineWidth: 9
+                    )
+                    .frame(width: 148, height: 148)
 
-                    case .listening:
-                        if isRecording {
-                            ledaState = .thinking
-                            stopLiveAudio()
-                        }
-
-                    default:
-                        break
-                    }
-                    
-                    withAnimation(.spring()) {
-                        scale = 1.0
+                ZStack {
+                    ForEach(0..<ClassicAlien.originalTen.count, id: \.self) { index in
+                        Capsule()
+                            .fill(index == selectedIndex ? Color.white : Color.green.opacity(0.5))
+                            .frame(
+                                width: index == selectedIndex ? 4 : 2,
+                                height: index == selectedIndex ? 14 : 9
+                            )
+                            .offset(y: -72)
+                            .rotationEffect(
+                                .degrees(
+                                    Double(index) * 36
+                                )
+                            )
                     }
                 }
+                .rotationEffect(.degrees(Double(-selectedIndex) * 36))
+                .animation(.spring(response: 0.32, dampingFraction: 0.7), value: selectedIndex)
+
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Color.green.opacity(0.9), Color.green.opacity(0.28), .black],
+                            center: .center,
+                            startRadius: 12,
+                            endRadius: 70
+                        )
+                    )
+                    .frame(width: 128, height: 128)
+
+                DiamondShape()
+                    .fill(Color.black.opacity(0.88))
+                    .frame(width: 87, height: 112)
+
+                Image(selectedAlien.assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 112)
+                    .id(selectedAlien.id)
+                    .transition(
+                        .asymmetric(
+                            insertion: .scale(scale: 0.55).combined(with: .opacity),
+                            removal: .scale(scale: 1.35).combined(with: .opacity)
+                        )
+                    )
+                    .shadow(color: .green.opacity(0.65), radius: 5)
+
+                Rectangle()
+                    .fill(Color.green.opacity(0.75))
+                    .frame(width: 94, height: 2)
+                    .blur(radius: 0.5)
+                    .offset(y: isScanning ? 48 : -48)
+                    .animation(
+                        .linear(duration: 1.05).repeatForever(autoreverses: true),
+                        value: isScanning
+                    )
+                    .mask {
+                        Circle()
+                            .frame(width: 116, height: 116)
+                    }
+
+                HStack {
+                    Image(systemName: "chevron.left")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }
+                .font(.system(size: 10, weight: .black))
+                .foregroundStyle(.green.opacity(0.8))
+                .frame(width: 170)
             }
 
-            if socketState == .connecting {
-                ProgressView()
-                    .controlSize(.mini)
-                    .offset(y: 82)
-            } else if socketState == .failed {
-                Text("Bridge unavailable. Tap to retry.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .offset(y: 82)
-            } else if let errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .offset(y: 82)
+            Text(selectedAlien.name)
+                .font(.system(size: 11, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text("TURN CROWN  •  TAP TO SELECT")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(.green.opacity(0.78))
+                .tracking(0.35)
+        }
+        .contentShape(Rectangle())
+        .focusable()
+        .focused($isCrownFocused)
+        .digitalCrownRotation(
+            $crownPosition,
+            from: 0,
+            through: Double(ClassicAlien.originalTen.count - 1),
+            by: 1,
+            sensitivity: .medium,
+            isContinuous: true,
+            isHapticFeedbackEnabled: true
+        )
+        .onChange(of: crownPosition) { _, newValue in
+            let newIndex = Int(newValue.rounded())
+
+            guard newIndex != selectedIndex,
+                  ClassicAlien.originalTen.indices.contains(newIndex) else {
+                return
             }
+
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.68)) {
+                selectedIndex = newIndex
+            }
+        }
+        .onTapGesture {
+            onSelect(selectedIndex)
+        }
+        .onAppear {
+            crownPosition = Double(selectedIndex)
+            isCrownFocused = true
+            isScanning = true
         }
     }
 }
@@ -387,6 +646,20 @@ struct HourglassShape: Shape {
         path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
         path.addLine(to: CGPoint(x: rect.midX, y: rect.midY))
 
+        path.closeSubpath()
+
+        return path
+    }
+}
+
+struct DiamondShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
         path.closeSubpath()
 
         return path
