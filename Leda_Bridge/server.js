@@ -1,16 +1,27 @@
 const fs = require("fs");
-const { WebSocketServer } = require("ws");
+const { WebSocket, WebSocketServer } = require("ws");
 const { execFile } = require("child_process");
 const path = require("path");
 
+const bridgePort = Number(process.env.LEDA_BRIDGE_PORT || 8765);
+
 const wss = new WebSocketServer({
-  port: 8765,
+  port: bridgePort,
   host: "0.0.0.0",
 });
 
 let sampleRate = 44100;
 let channels = 1;
 let audioChunks = [];
+
+function sendToWatch(socket, type, text = "") {
+  if (socket.readyState !== WebSocket.OPEN) {
+    console.error("Cannot send to Watch: WebSocket is not open");
+    return;
+  }
+
+  socket.send(JSON.stringify({ type, text }));
+}
 
 function makeWavHeader(dataLength, sampleRate, channels) {
   const bitsPerSample = 32;
@@ -56,12 +67,27 @@ function transcribeAudio(socket) {
     (error, stdout, stderr) => {
       if (error) {
         console.error("Whisper failed:", error.message);
+        sendToWatch(socket, "LEDA_ERROR", "I couldn't transcribe that. Tap to try again.");
         return;
       }
 
       console.log("Whisper finished");
 
-      const transcript = fs.readFileSync("audio.txt", "utf8").trim();
+      let transcript;
+
+      try {
+        transcript = fs.readFileSync("audio.txt", "utf8").trim();
+      } catch (readError) {
+        console.error("Could not read transcript:", readError.message);
+        sendToWatch(socket, "LEDA_ERROR", "I couldn't read the transcript. Tap to try again.");
+        return;
+      }
+
+      if (!transcript) {
+        console.error("Whisper returned an empty transcript");
+        sendToWatch(socket, "LEDA_ERROR", "I didn't hear anything. Tap to try again.");
+        return;
+      }
 
       console.log("You:", transcript);
 
@@ -83,6 +109,7 @@ function askLeda(transcript, socket) {
     (error, stdout, stderr) => {
       if (error) {
         console.error("OpenClaw failed:", error.message);
+        sendToWatch(socket, "LEDA_ERROR", "LEDA couldn't answer. Tap to try again.");
         return;
       }
 
@@ -90,12 +117,7 @@ function askLeda(transcript, socket) {
 
       console.log("LEDA:", reply);
 
-      socket.send(
-        JSON.stringify({
-          type: "LEDA_REPLY",
-          text: reply
-        })
-      );
+      sendToWatch(socket, "LEDA_REPLY", reply);
     }
   );
 }
@@ -103,12 +125,7 @@ function askLeda(transcript, socket) {
 wss.on("connection", (socket) => {
   console.log("Apple Watch connected!");
 
-  socket.send(
-    JSON.stringify({
-      type: "CONNECTED",
-      text: "",
-    }),
-  );
+  sendToWatch(socket, "CONNECTED");
 
   audioChunks = [];
 
@@ -144,6 +161,7 @@ wss.on("connection", (socket) => {
 
       if (rawAudio.length === 0) {
         console.log("No audio received");
+        sendToWatch(socket, "LEDA_ERROR", "I didn't receive any audio. Tap to try again.");
         return;
       }
 
@@ -151,7 +169,14 @@ wss.on("connection", (socket) => {
 
       const wav = Buffer.concat([header, rawAudio]);
 
-      fs.writeFileSync("audio.wav", wav);
+      try {
+        fs.writeFileSync("audio.wav", wav);
+      } catch (writeError) {
+        console.error("Could not save audio:", writeError.message);
+        sendToWatch(socket, "LEDA_ERROR", "I couldn't save that recording. Tap to try again.");
+        audioChunks = [];
+        return;
+      }
 
       console.log("Saved audio.wav:", wav.length, "bytes");
       transcribeAudio(socket);
@@ -170,4 +195,4 @@ wss.on("connection", (socket) => {
   });
 });
 
-console.log("LEDA bridge listening on port 8765");
+console.log(`LEDA bridge listening on port ${bridgePort}`);

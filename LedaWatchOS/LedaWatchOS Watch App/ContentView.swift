@@ -43,6 +43,7 @@ struct ContentView: View {
     @State private var speechDelegate = SpeechDelegate()
     @State private var isRecording = false
     @State private var socketState: SocketState = .disconnected
+    @State private var errorMessage: String?
     
     var omnitrixColor: Color {
         switch ledaState {
@@ -185,6 +186,7 @@ struct ContentView: View {
         }
 
         socketState = .connecting
+        errorMessage = nil
 
         let request = URLRequest(url: bridgeURL, timeoutInterval: 8)
         webSocketTask = URLSession.shared.webSocketTask(with: request)
@@ -196,6 +198,10 @@ struct ContentView: View {
     }
     
     func sendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard socketState == .connected else {
+            return
+        }
+
         let audioBuffer = buffer.audioBufferList.pointee.mBuffers
 
         guard let rawData = audioBuffer.mData else {
@@ -247,8 +253,16 @@ struct ContentView: View {
 
                         if message.type == "LEDA_REPLY" {
                             Task { @MainActor in
+                                errorMessage = nil
                                 ledaState = .speaking
                                 speak(message.text)
+                            }
+                        }
+
+                        if message.type == "LEDA_ERROR" {
+                            Task { @MainActor in
+                                errorMessage = message.text
+                                ledaState = .idle
                             }
                         }
 
@@ -320,6 +334,7 @@ struct ContentView: View {
                     switch ledaState {
 
                     case .idle:
+                        errorMessage = nil
                         ledaState = .listening
                         connectToLedaBridge()
 
@@ -345,6 +360,12 @@ struct ContentView: View {
                     .offset(y: 82)
             } else if socketState == .failed {
                 Text("Bridge unavailable. Tap to retry.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .offset(y: 82)
+            } else if let errorMessage {
+                Text(errorMessage)
                     .font(.system(size: 10))
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
