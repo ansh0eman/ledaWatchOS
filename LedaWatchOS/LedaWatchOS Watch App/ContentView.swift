@@ -63,7 +63,8 @@ struct ContentView: View {
     @State private var isRecording = false
     @State private var socketState: SocketState = .disconnected
     @State private var errorMessage: String?
-    @State private var isChoosingAlien = true
+    @State private var isChoosingAlien = false
+    @State private var isTransforming = false
     @State private var selectedAlienIndex = 0
 
     private var selectedAlien: ClassicAlien {
@@ -92,6 +93,8 @@ struct ContentView: View {
             speechDelegate.onFinish = {
                 Task { @MainActor in
                     ledaState = .idle
+                    isTransforming = false
+                    playSound(named: "ben10-short")
                 }
             }
 
@@ -103,9 +106,9 @@ struct ContentView: View {
             speechSynthesizer.speak(utterance)
     }
     
-    func playActivationSound() {
+    func playSound(named resourceName: String) {
         guard let url = Bundle.main.url(
-            forResource: "activation",
+            forResource: resourceName,
             withExtension: "mp3"
         ) else {
             return
@@ -115,8 +118,12 @@ struct ContentView: View {
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.play()
         } catch {
-            print("Could not play sound")
+            print("Could not play \(resourceName):", error)
         }
+    }
+
+    func playActivationSound() {
+        playSound(named: "activation")
     }
     
     func startLiveAudio() {
@@ -333,10 +340,11 @@ struct ContentView: View {
     func selectAlien(at index: Int) {
         selectedAlienIndex = index
         isChoosingAlien = false
+        isTransforming = true
         errorMessage = nil
 
         WKInterfaceDevice.current().play(.click)
-        playActivationSound()
+        playSound(named: "alien-confirm")
 
         withAnimation(.easeInOut(duration: 0.35)) {
             scale = 1.18
@@ -345,6 +353,7 @@ struct ContentView: View {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             beginConversation()
+            isTransforming = false
 
             withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
                 scale = 1.0
@@ -359,17 +368,23 @@ struct ContentView: View {
 
         errorMessage = nil
         ledaState = .listening
+        playSound(named: "ben10-short")
         connectToLedaBridge()
     }
 
     func handleOmnitrixTap() {
         switch ledaState {
         case .idle:
-            beginConversation()
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isChoosingAlien = true
+            }
+            WKInterfaceDevice.current().play(.click)
+            playActivationSound()
 
         case .listening:
             if isRecording {
                 ledaState = .thinking
+                playSound(named: "ben10-short")
                 stopLiveAudio()
             }
 
@@ -381,7 +396,7 @@ struct ContentView: View {
     var stateLabel: String {
         switch ledaState {
         case .idle:
-            return selectedAlien.name
+            return ""
         case .listening:
             return "LISTENING"
         case .thinking:
@@ -396,7 +411,9 @@ struct ContentView: View {
             Color.black
 
             if isChoosingAlien {
-                AlienSelectorView(selectedIndex: $selectedAlienIndex) { index in
+                AlienSelectorView(selectedIndex: $selectedAlienIndex, onDial: {
+                    playSound(named: "dial-tick")
+                }) { index in
                     selectAlien(at: index)
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -410,16 +427,39 @@ struct ContentView: View {
                         .fill(omnitrixColor)
                         .frame(width: 128, height: 128)
 
-                    DiamondShape()
-                        .fill(Color.black.opacity(0.9))
-                        .frame(width: 88, height: 112)
-                        .rotationEffect(.degrees(rotation))
+                    if ledaState == .idle && !isTransforming {
+                        ZStack {
+                            Circle()
+                                .stroke(Color.black.opacity(0.55), lineWidth: 5)
+                                .frame(width: 104, height: 104)
 
-                    Image(selectedAlien.assetName)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 92, height: 108)
-                        .shadow(color: .black.opacity(0.8), radius: 2, y: 2)
+                            Circle()
+                                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                                .frame(width: 93, height: 93)
+
+                            HourglassShape()
+                                .fill(Color.black)
+                                .overlay {
+                                    HourglassShape()
+                                        .stroke(Color.black.opacity(0.9), lineWidth: 3)
+                                }
+                                .shadow(color: Color.green.opacity(0.85), radius: 7)
+                                .frame(width: 72, height: 82)
+                        }
+                    } else {
+                        ZStack {
+                            DiamondShape()
+                                .fill(Color.black.opacity(0.9))
+                                .frame(width: 88, height: 112)
+                                .rotationEffect(.degrees(rotation))
+
+                            Image(selectedAlien.assetName)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 92, height: 108)
+                                .shadow(color: .black.opacity(0.8), radius: 2, y: 2)
+                        }
+                    }
                 }
                 .scaleEffect(scale)
                 .contentShape(Circle())
@@ -429,34 +469,15 @@ struct ContentView: View {
                 .transition(.opacity.combined(with: .scale(scale: 1.12)))
 
                 VStack {
-                    HStack {
-                        Button {
-                            guard ledaState == .idle else {
-                                return
-                            }
-
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                isChoosingAlien = true
-                            }
-                        } label: {
-                            Image(systemName: "circle.grid.3x3.fill")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(.green)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(ledaState != .idle)
-                        .opacity(ledaState == .idle ? 1 : 0.25)
-
-                        Spacer()
-                    }
-
                     Spacer()
 
-                    Text(stateLabel)
-                        .font(.system(size: 10, weight: .black, design: .rounded))
-                        .foregroundStyle(omnitrixColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                    if !stateLabel.isEmpty {
+                        Text(stateLabel)
+                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .foregroundStyle(omnitrixColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -485,6 +506,7 @@ struct ContentView: View {
 
 struct AlienSelectorView: View {
     @Binding var selectedIndex: Int
+    let onDial: () -> Void
     let onSelect: (Int) -> Void
 
     @State private var crownPosition = 0.0
@@ -622,6 +644,7 @@ struct AlienSelectorView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.68)) {
                 selectedIndex = newIndex
             }
+            onDial()
         }
         .onTapGesture {
             onSelect(selectedIndex)
