@@ -9,23 +9,11 @@ import SwiftUI
 import WatchKit
 import AVFoundation
 
-nonisolated struct LedaMessage: Codable {
-    let type: String
-    let text: String
-}
-
 enum LedaState {
     case idle
     case listening
     case thinking
     case speaking
-}
-
-enum SocketState {
-    case disconnected
-    case connecting
-    case connected
-    case failed
 }
 
 struct ClassicAlien: Identifiable {
@@ -48,15 +36,13 @@ struct ClassicAlien: Identifiable {
 }
 
 struct ContentView: View {
-
-    private let bridgeURL = URL(string: "ws://Anshumans-MacBook-Air.local:8765")!
     
     @State private var ledaState: LedaState = .idle
     @State private var rotation = 0.0
     @State private var scale = 1.0
     @State private var audioPlayer: AVAudioPlayer?
     @State private var audioEngine = AVAudioEngine()
-    @State private var webSocketTask: URLSessionWebSocketTask?
+    @State private var socketClient = LedaSocketClient()
     @State private var didSendAudioFormat = false
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var speechDelegate = SpeechDelegate()
@@ -90,20 +76,20 @@ struct ContentView: View {
     func speak(_ text: String) {
         speechSynthesizer.delegate = speechDelegate
 
-            speechDelegate.onFinish = {
-                Task { @MainActor in
-                    ledaState = .idle
-                    isTransforming = false
-                    playSound(named: "ben10-short")
-                }
+        speechDelegate.onFinish = {
+            Task { @MainActor in
+                ledaState = .idle
+                isTransforming = false
+                playSound(named: "ben10-short")
             }
+        }
 
-            let utterance = AVSpeechUtterance(string: text)
+        let utterance = AVSpeechUtterance(string: text)
 
-            utterance.rate = 0.5
-            utterance.pitchMultiplier = 1.0
+        utterance.rate = 0.5
+        utterance.pitchMultiplier = 1.0
 
-            speechSynthesizer.speak(utterance)
+        speechSynthesizer.speak(utterance)
     }
     
     func playSound(named resourceName: String) {
@@ -148,14 +134,13 @@ struct ContentView: View {
             ) { buffer, time in
                 
                 if !didSendAudioFormat {
-
                     let actualFormat = buffer.format
 
                     let info = """
                     AUDIO_FORMAT|\(actualFormat.sampleRate)|\(actualFormat.channelCount)|\(actualFormat.commonFormat.rawValue)|\(actualFormat.isInterleaved)
                     """
 
-                    webSocketTask?.send(.string(info)) { error in
+                    socketClient.send(text: info) { error in
                         if let error {
                             print("Format send error:", error)
                         } else {
@@ -167,7 +152,6 @@ struct ContentView: View {
                 }
 
                 sendAudioBuffer(buffer)
-
             }
             
             audioEngine.prepare()
@@ -194,43 +178,60 @@ struct ContentView: View {
         isRecording = false
         didSendAudioFormat = false
 
-        webSocketTask?.send(.string("STOP_AUDIO")) { error in
+        socketClient.send(text: "STOP_AUDIO") { error in
             if let error {
                 print("STOP_AUDIO send error:", error)
             } else {
                 print("Told Mac to save audio")
             }
         }
+
         print("LEDA microphone OFF")
     }
     
     func connectToLedaBridge() {
-        if socketState == .connected {
+        if socketClient.state == .connected {
+            socketState = .connected
+
             if ledaState == .listening && !isRecording {
                 startLiveAudio()
             }
             return
         }
 
-        guard socketState != .connecting else {
-            print("Socket state:", socketState)
-            return
-        }
-
-        socketState = .connecting
         errorMessage = nil
 
-        let request = URLRequest(url: bridgeURL, timeoutInterval: 8)
-        webSocketTask = URLSession.shared.webSocketTask(with: request)
-        webSocketTask?.resume()
+        socketClient.onStateChange = { newState in
+            Task { @MainActor in
+                socketState = newState
 
-        receiveFromLeda()
+                if newState == .connected {
+                    print("✅ LEDA bridge connected")
 
-        print("Connecting to LEDA bridge...")
+                    if ledaState == .listening && !isRecording {
+                        startLiveAudio()
+                    }
+                }
+            }
+        }
+
+        socketClient.onMessage = { message in
+            Task { @MainActor in
+                handleLedaMessage(message)
+            }
+        }
+
+        socketClient.onFailure = { error in
+            Task { @MainActor in
+                handleSocketFailure(error)
+            }
+        }
+
+        socketClient.connect()
     }
     
     func sendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard socketState == .connected else {
+        guard socketClient.state == .connected else {
             return
         }
 
@@ -245,95 +246,43 @@ struct ContentView: View {
             count: Int(audioBuffer.mDataByteSize)
         )
 
-        webSocketTask?.send(.data(data)) { error in
-            if let error = error {
+        socketClient.send(data: data) { error in
+            if let error {
                 print("Audio send error:", error)
             }
         }
     }
-    
-    func receiveFromLeda() {
-        webSocketTask?.receive { result in
-            switch result {
 
-            case .success(let message):
+    func handleLedaMessage(_ message: LedaMessage) {
+        if message.type == "LEDA_REPLY" {
+            errorMessage = nil
+            ledaState = .speaking
+            speak(message.text)
+        }
 
-                switch message {
+        if message.type == "LEDA_ERROR" {
+            errorMessage = message.text
+            ledaState = .idle
+        }
 
-                case .string(let text):
+        print("Type:", message.type)
+        print("LEDA said:", message.text)
+    }
 
-                    print("🤖 FROM MAC:", text)
+    func handleSocketFailure(_ error: Error) {
+        print("Socket failure reached UI:", error)
 
-                    guard let data = text.data(using: .utf8) else {
-                        return
-                    }
+        if isRecording {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            audioEngine.stop()
+            isRecording = false
+            didSendAudioFormat = false
+        }
 
-                    do {
-                        let message = try JSONDecoder()
-                            .decode(LedaMessage.self, from: data)
+        socketState = .failed
 
-                        if message.type == "CONNECTED" {
-                            Task { @MainActor in
-                                socketState = .connected
-                                print("✅ LEDA bridge connected")
-
-                                if ledaState == .listening && !isRecording {
-                                    startLiveAudio()
-                                }
-                            }
-                        }
-
-                        if message.type == "LEDA_REPLY" {
-                            Task { @MainActor in
-                                errorMessage = nil
-                                ledaState = .speaking
-                                speak(message.text)
-                            }
-                        }
-
-                        if message.type == "LEDA_ERROR" {
-                            Task { @MainActor in
-                                errorMessage = message.text
-                                ledaState = .idle
-                            }
-                        }
-
-                        print("Type:", message.type)
-                        print("LEDA said:", message.text)
-
-                    } catch {
-                        print("Could not decode LEDA message:", error)
-                    }
-
-                case .data(let data):
-                    print("📦 Binary response:", data.count)
-
-                @unknown default:
-                    break
-                }
-
-                // Keep listening for the next message
-                receiveFromLeda()
-
-            case .failure(let error):
-                print("❌ Receive error:", error)
-
-                Task { @MainActor in
-                    if isRecording {
-                        audioEngine.inputNode.removeTap(onBus: 0)
-                        audioEngine.stop()
-                        isRecording = false
-                        didSendAudioFormat = false
-                    }
-
-                    socketState = .failed
-                    webSocketTask = nil
-
-                    if ledaState == .listening {
-                        ledaState = .idle
-                    }
-                }
-            }
+        if ledaState == .listening {
+            ledaState = .idle
         }
     }
 
@@ -700,7 +649,6 @@ final class SpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
         onFinish?()
     }
 }
-
 
 #Preview {
     ContentView()
