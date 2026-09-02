@@ -41,12 +41,10 @@ struct ContentView: View {
     @State private var rotation = 0.0
     @State private var scale = 1.0
     @State private var audioPlayer: AVAudioPlayer?
-    @State private var audioEngine = AVAudioEngine()
+    @State private var audioManager = AudioManager()
     @State private var socketClient = LedaSocketClient()
-    @State private var didSendAudioFormat = false
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var speechDelegate = SpeechDelegate()
-    @State private var isRecording = false
     @State private var socketState: SocketState = .disconnected
     @State private var errorMessage: String?
     @State private var isChoosingAlien = false
@@ -113,70 +111,49 @@ struct ContentView: View {
     }
     
     func startLiveAudio() {
-        let session = AVAudioSession.sharedInstance()
+        audioManager.onFormat = { format in
+            let info = """
+            AUDIO_FORMAT|\(format.sampleRate)|\(format.channelCount)|\(format.commonFormat.rawValue)|\(format.isInterleaved)
+            """
 
-        do {
-            try session.setCategory(.playAndRecord, mode: .voiceChat)
-            try session.setActive(true)
-
-            let input = audioEngine.inputNode
-            let format = input.inputFormat(forBus: 0)
-            
-            print("Sample rate:", format.sampleRate)
-            print("Channels:", format.channelCount)
-            print("Format:", format.commonFormat)
-            print("Interleaved:", format.isInterleaved)
-
-            input.installTap(
-                onBus: 0,
-                bufferSize: 1024,
-                format: format
-            ) { buffer, time in
-                
-                if !didSendAudioFormat {
-                    let actualFormat = buffer.format
-
-                    let info = """
-                    AUDIO_FORMAT|\(actualFormat.sampleRate)|\(actualFormat.channelCount)|\(actualFormat.commonFormat.rawValue)|\(actualFormat.isInterleaved)
-                    """
-
-                    socketClient.send(text: info) { error in
-                        if let error {
-                            print("Format send error:", error)
-                        } else {
-                            print("REAL audio format sent")
-                        }
-                    }
-
-                    didSendAudioFormat = true
+            socketClient.send(text: info) { error in
+                if let error {
+                    print("Format send error:", error)
+                } else {
+                    print("REAL audio format sent")
                 }
-
-                sendAudioBuffer(buffer)
             }
-            
-            audioEngine.prepare()
-            try audioEngine.start()
-            isRecording = true
-
-            print("LEDA microphone LIVE")
-
-        } catch {
-            print("Audio error:", error)
-            ledaState = .idle
         }
+
+        audioManager.onAudioData = { data in
+            guard socketClient.state == .connected else {
+                return
+            }
+
+            socketClient.send(data: data) { error in
+                if let error {
+                    print("Audio send error:", error)
+                }
+            }
+        }
+
+        audioManager.onFailure = { error in
+            Task { @MainActor in
+                print("Audio error reached UI:", error)
+                ledaState = .idle
+            }
+        }
+
+        audioManager.start()
     }
     
     func stopLiveAudio() {
-        guard isRecording else {
+        guard audioManager.isRecording else {
             print("LEDA microphone was not running")
             return
         }
 
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
-
-        isRecording = false
-        didSendAudioFormat = false
+        audioManager.stop()
 
         socketClient.send(text: "STOP_AUDIO") { error in
             if let error {
@@ -185,15 +162,13 @@ struct ContentView: View {
                 print("Told Mac to save audio")
             }
         }
-
-        print("LEDA microphone OFF")
     }
     
     func connectToLedaBridge() {
         if socketClient.state == .connected {
             socketState = .connected
 
-            if ledaState == .listening && !isRecording {
+            if ledaState == .listening && !audioManager.isRecording {
                 startLiveAudio()
             }
             return
@@ -208,7 +183,7 @@ struct ContentView: View {
                 if newState == .connected {
                     print("✅ LEDA bridge connected")
 
-                    if ledaState == .listening && !isRecording {
+                    if ledaState == .listening && !audioManager.isRecording {
                         startLiveAudio()
                     }
                 }
@@ -228,29 +203,6 @@ struct ContentView: View {
         }
 
         socketClient.connect()
-    }
-    
-    func sendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard socketClient.state == .connected else {
-            return
-        }
-
-        let audioBuffer = buffer.audioBufferList.pointee.mBuffers
-
-        guard let rawData = audioBuffer.mData else {
-            return
-        }
-
-        let data = Data(
-            bytes: rawData,
-            count: Int(audioBuffer.mDataByteSize)
-        )
-
-        socketClient.send(data: data) { error in
-            if let error {
-                print("Audio send error:", error)
-            }
-        }
     }
 
     func handleLedaMessage(_ message: LedaMessage) {
@@ -272,11 +224,8 @@ struct ContentView: View {
     func handleSocketFailure(_ error: Error) {
         print("Socket failure reached UI:", error)
 
-        if isRecording {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
-            isRecording = false
-            didSendAudioFormat = false
+        if audioManager.isRecording {
+            audioManager.stop()
         }
 
         socketState = .failed
@@ -331,7 +280,7 @@ struct ContentView: View {
             playActivationSound()
 
         case .listening:
-            if isRecording {
+            if audioManager.isRecording {
                 ledaState = .thinking
                 playSound(named: "ben10-short")
                 stopLiveAudio()
