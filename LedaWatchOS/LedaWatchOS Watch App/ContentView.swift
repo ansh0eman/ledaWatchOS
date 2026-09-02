@@ -30,12 +30,10 @@ struct ClassicAlien: Identifiable {
 
 struct ContentView: View {
 
-    @State private var controller = LedaController()
+    @State private var controller = RealtimeLedaController()
     @State private var rotation = 0.0
     @State private var scale = 1.0
     @State private var audioPlayer: AVAudioPlayer?
-    @State private var speechSynthesizer = AVSpeechSynthesizer()
-    @State private var speechDelegate = SpeechDelegate()
     @State private var isChoosingAlien = false
     @State private var isTransforming = false
     @State private var selectedAlienIndex = 0
@@ -58,25 +56,6 @@ struct ContentView: View {
         case .speaking:
             return .cyan
         }
-    }
-
-    func speak(_ text: String) {
-        speechSynthesizer.delegate = speechDelegate
-
-        speechDelegate.onFinish = {
-            Task { @MainActor in
-                controller.finishSpeaking()
-                isTransforming = false
-                playSound(named: "ben10-short")
-            }
-        }
-
-        let utterance = AVSpeechUtterance(string: text)
-
-        utterance.rate = 0.5
-        utterance.pitchMultiplier = 1.0
-
-        speechSynthesizer.speak(utterance)
     }
 
     func playSound(named resourceName: String) {
@@ -133,13 +112,11 @@ struct ContentView: View {
             WKInterfaceDevice.current().play(.click)
             playActivationSound()
 
-        case .listening:
-            if controller.isRecording {
-                playSound(named: "ben10-short")
-                controller.stopListening()
-            }
+        case .listening, .speaking:
+            playSound(named: "ben10-short")
+            controller.endConversation()
 
-        default:
+        case .thinking:
             break
         }
     }
@@ -238,7 +215,7 @@ struct ContentView: View {
                         .controlSize(.mini)
                         .offset(y: 78)
                 } else if controller.socketState == .failed {
-                    Text("Bridge unavailable. Tap to retry.")
+                    Text("Realtime bridge unavailable. Tap to retry.")
                         .font(.system(size: 9))
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
@@ -249,13 +226,6 @@ struct ContentView: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                         .offset(y: 78)
-                }
-            }
-        }
-        .onAppear {
-            controller.onReply = { text in
-                Task { @MainActor in
-                    speak(text)
                 }
             }
         }
@@ -444,18 +414,6 @@ struct DiamondShape: Shape {
         path.closeSubpath()
 
         return path
-    }
-}
-
-final class SpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
-
-    var onFinish: (() -> Void)?
-
-    func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didFinish utterance: AVSpeechUtterance
-    ) {
-        onFinish?()
     }
 }
 
