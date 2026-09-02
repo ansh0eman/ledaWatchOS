@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { GatewayClient } from "@openclaw/gateway-client";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -132,7 +131,6 @@ async function createRealtimeSession(socket) {
     transport: "gateway-relay",
     brain: "agent-consult",
     sessionKey: "main",
-    idempotencyKey: randomUUID(),
   });
 
   const sessionId = result.sessionId || result.relaySessionId;
