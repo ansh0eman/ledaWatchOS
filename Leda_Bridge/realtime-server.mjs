@@ -1,43 +1,11 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { GatewayClient } from "@openclaw/gateway-client";
 import { WebSocket, WebSocketServer } from "ws";
 
 const watchPort = Number(process.env.LEDA_REALTIME_BRIDGE_PORT || 8766);
 const gatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "ws://127.0.0.1:18789";
-
-function readOpenClawConfig(key) {
-  try {
-    const value = execFileSync(
-      "openclaw",
-      ["config", "get", key],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    ).trim();
-
-    if (!value || value === "null" || value === "undefined") {
-      return undefined;
-    }
-
-    return value;
-  } catch {
-    return undefined;
-  }
-}
-
-// This bridge is a same-host backend helper. OpenClaw allows a direct-loopback
-// gateway-client/backend connection to omit device identity when it authenticates
-// with the Gateway's shared token/password. Explicit environment variables win;
-// otherwise we read the local OpenClaw config without ever printing the secret.
-const gatewayToken =
-  process.env.OPENCLAW_GATEWAY_TOKEN ||
-  readOpenClawConfig("gateway.auth.token");
-
-const gatewayPassword =
-  process.env.OPENCLAW_GATEWAY_PASSWORD ||
-  readOpenClawConfig("gateway.auth.password");
+const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+const gatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
 
 const TARGET_SAMPLE_RATE = 24000;
 
@@ -56,8 +24,6 @@ function createGatewayReadyPromise() {
     gatewayReadyReject = reject;
   });
 
-  // A failed initial Gateway connection should be reported, not become an
-  // unhandled rejection that terminates the realtime bridge process.
   promise.catch(() => {});
   return promise;
 }
@@ -85,7 +51,7 @@ const gateway = new GatewayClient({
 
     if (!gatewayToken && !gatewayPassword) {
       console.error(
-        "No Gateway shared credential was found. Configure gateway.auth.token/password or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD.",
+        "No Gateway credential provided. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD before starting the realtime bridge.",
       );
     }
 
@@ -322,8 +288,6 @@ watchServer.on("connection", (socket) => {
     }
 
     if (message === "STOP_AUDIO") {
-      // Prototype 2 uses provider VAD. STOP_AUDIO now means only that the
-      // Watch stopped sending PCM; there is no WAV/Whisper batch step.
       console.log("⌚ Watch stopped sending realtime audio");
       return;
     }
@@ -376,5 +340,5 @@ process.on("SIGINT", async () => {
 console.log(`LEDA Prototype 2 realtime bridge listening on port ${watchPort}`);
 console.log(`OpenClaw Gateway: ${gatewayUrl}`);
 console.log(
-  `Gateway auth: ${gatewayToken || gatewayPassword ? "shared credential loaded" : "no shared credential found"}`,
+  `Gateway auth: ${gatewayToken || gatewayPassword ? "explicit credential loaded" : "no credential provided"}`,
 );
