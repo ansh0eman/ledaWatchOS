@@ -66,6 +66,10 @@ final class LedaController {
         ledaState = .idle
     }
 
+    func clearError() {
+        errorMessage = nil
+    }
+
     private func connectIfNeeded() {
         if socketClient.state == .connected {
             socketState = .connected
