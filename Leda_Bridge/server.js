@@ -1,7 +1,7 @@
 const fs = require("fs");
 const { WebSocket, WebSocketServer } = require("ws");
 const { execFile } = require("child_process");
-const path = require("path");
+const { performance } = require("perf_hooks");
 
 const bridgePort = Number(process.env.LEDA_BRIDGE_PORT || 8765);
 
@@ -13,6 +13,15 @@ const wss = new WebSocketServer({
 let sampleRate = 44100;
 let channels = 1;
 let audioChunks = [];
+let turnTiming = null;
+
+function msBetween(start, end) {
+  return (end - start).toFixed(0);
+}
+
+function logLatency(label, milliseconds) {
+  console.log(`[LATENCY] ${label}: ${milliseconds} ms`);
+}
 
 function sendToWatch(socket, type, text = "") {
   if (socket.readyState !== WebSocket.OPEN) {
@@ -53,6 +62,8 @@ function makeWavHeader(dataLength, sampleRate, channels) {
 }
 
 function transcribeAudio(socket) {
+  const whisperStartedAt = performance.now();
+
   execFile(
     "whisper",
     [
@@ -65,6 +76,13 @@ function transcribeAudio(socket) {
       "txt",
     ],
     (error, stdout, stderr) => {
+      const whisperFinishedAt = performance.now();
+      logLatency("Whisper", msBetween(whisperStartedAt, whisperFinishedAt));
+
+      if (turnTiming) {
+        turnTiming.whisperFinishedAt = whisperFinishedAt;
+      }
+
       if (error) {
         console.error("Whisper failed:", error.message);
         sendToWatch(socket, "LEDA_ERROR", "I couldn't transcribe that. Tap to try again.");
@@ -98,6 +116,7 @@ function transcribeAudio(socket) {
 
 function askLeda(transcript, socket) {
   console.log("Sending to LEDA:", transcript);
+  const openClawStartedAt = performance.now();
 
   execFile(
     "openclaw",
@@ -107,6 +126,13 @@ function askLeda(transcript, socket) {
       "--message", transcript
     ],
     (error, stdout, stderr) => {
+      const openClawFinishedAt = performance.now();
+      logLatency("OpenClaw", msBetween(openClawStartedAt, openClawFinishedAt));
+
+      if (turnTiming) {
+        turnTiming.openClawFinishedAt = openClawFinishedAt;
+      }
+
       if (error) {
         console.error("OpenClaw failed:", error.message);
         sendToWatch(socket, "LEDA_ERROR", "LEDA couldn't answer. Tap to try again.");
@@ -118,6 +144,12 @@ function askLeda(transcript, socket) {
       console.log("LEDA:", reply);
 
       sendToWatch(socket, "LEDA_REPLY", reply);
+
+      if (turnTiming) {
+        const replySentAt = performance.now();
+        logLatency("STOP_AUDIO → reply sent", msBetween(turnTiming.stopReceivedAt, replySentAt));
+        console.log("[LATENCY] ---- turn complete ----");
+      }
     }
   );
 }
@@ -133,8 +165,6 @@ wss.on("connection", (socket) => {
     // 1. Binary messages = actual microphone audio
     if (isBinary) {
       audioChunks.push(data);
-
-      console.log("Audio received:", data.length, "bytes");
       return;
     }
 
@@ -155,7 +185,11 @@ wss.on("connection", (socket) => {
 
     // STOP AUDIO
     if (message === "STOP_AUDIO") {
+      const stopReceivedAt = performance.now();
+      turnTiming = { stopReceivedAt };
+
       console.log("Audio stream finished");
+      console.log("[LATENCY] ---- turn started ----");
 
       const rawAudio = Buffer.concat(audioChunks);
 
@@ -166,7 +200,6 @@ wss.on("connection", (socket) => {
       }
 
       const header = makeWavHeader(rawAudio.length, sampleRate, channels);
-
       const wav = Buffer.concat([header, rawAudio]);
 
       try {
@@ -178,8 +211,13 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      const wavSavedAt = performance.now();
+      turnTiming.wavSavedAt = wavSavedAt;
+      logLatency("STOP_AUDIO → WAV saved", msBetween(stopReceivedAt, wavSavedAt));
+
       console.log("Saved audio.wav:", wav.length, "bytes");
       transcribeAudio(socket);
+
       // Clear old recording so the next conversation starts fresh
       audioChunks = [];
 
