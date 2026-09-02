@@ -14,14 +14,21 @@ enum SocketState {
 
 final class LedaSocketClient {
 
-    private let bridgeURL = URL(string: "ws://Anshumans-MacBook-Air.local:8765")!
+    private let bridgeURL: URL
     private var webSocketTask: URLSessionWebSocketTask?
 
     private(set) var state: SocketState = .disconnected
 
     var onStateChange: ((SocketState) -> Void)?
     var onMessage: ((LedaMessage) -> Void)?
+    var onBinaryData: ((Data) -> Void)?
     var onFailure: ((Error) -> Void)?
+
+    init(
+        bridgeURL: URL = URL(string: "ws://Anshumans-MacBook-Air.local:8765")!
+    ) {
+        self.bridgeURL = bridgeURL
+    }
 
     func connect() {
         if state == .connected {
@@ -40,7 +47,7 @@ final class LedaSocketClient {
 
         receiveNextMessage()
 
-        print("Connecting to LEDA bridge...")
+        print("Connecting to LEDA bridge:", bridgeURL)
     }
 
     func send(text: String, completion: ((Error?) -> Void)? = nil) {
@@ -105,7 +112,7 @@ final class LedaSocketClient {
             }
 
         case .data(let data):
-            print("📦 Binary response:", data.count)
+            onBinaryData?(data)
 
         @unknown default:
             break
