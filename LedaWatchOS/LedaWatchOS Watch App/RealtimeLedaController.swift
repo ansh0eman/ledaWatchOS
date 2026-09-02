@@ -29,27 +29,37 @@ final class RealtimeLedaController {
         self.socketClient = socketClient
         self.audioPlayer = audioPlayer
 
+        print("🚀 Prototype 2 controller initialized")
+        print("🌐 Realtime bridge target: ws://Anshumans-MacBook-Air.local:8766")
+
         configureCallbacks()
     }
 
     func beginConversation() {
         guard ledaState == .idle else {
+            print("⚠️ Prototype 2 begin ignored; state:", ledaState)
             return
         }
+
+        print("🎙️ Prototype 2 beginConversation()")
 
         errorMessage = nil
         latestTranscript = ""
         ledaState = .listening
 
         if socketClient.state == .connected {
+            print("✅ Reusing existing realtime bridge connection")
             socketState = .connected
             startAudioIfNeeded()
         } else {
+            print("🔌 Connecting Watch to Prototype 2 bridge on port 8766")
             socketClient.connect()
         }
     }
 
     func endConversation() {
+        print("🛑 Ending Prototype 2 realtime conversation")
+
         if audioManager.isRecording {
             audioManager.stop()
         }
@@ -74,6 +84,7 @@ final class RealtimeLedaController {
 
         audioManager.onFailure = { [weak self] error in
             Task { @MainActor in
+                print("❌ Prototype 2 microphone failure:", error)
                 self?.errorMessage = "Microphone unavailable: \(error.localizedDescription)"
                 self?.ledaState = .idle
             }
@@ -81,9 +92,11 @@ final class RealtimeLedaController {
 
         socketClient.onStateChange = { [weak self] newState in
             Task { @MainActor in
+                print("🔌 Prototype 2 socket state:", newState)
                 self?.socketState = newState
 
                 if newState == .connected {
+                    print("✅ Watch connected to Prototype 2 bridge")
                     self?.startAudioIfNeeded()
                 }
             }
@@ -91,6 +104,7 @@ final class RealtimeLedaController {
 
         socketClient.onMessage = { [weak self] message in
             Task { @MainActor in
+                print("📨 Prototype 2 event:", message.type)
                 self?.handle(message)
             }
         }
@@ -101,6 +115,7 @@ final class RealtimeLedaController {
                     return
                 }
 
+                print("🔊 Realtime audio chunk from LEDA:", data.count, "bytes")
                 self.ledaState = .speaking
                 self.audioPlayer.play(data)
             }
@@ -111,6 +126,8 @@ final class RealtimeLedaController {
                 guard let self else {
                     return
                 }
+
+                print("❌ Prototype 2 bridge failure:", error)
 
                 if self.audioManager.isRecording {
                     self.audioManager.stop()
@@ -130,6 +147,7 @@ final class RealtimeLedaController {
             return
         }
 
+        print("🎤 Starting realtime microphone stream")
         audioManager.start()
     }
 
@@ -138,6 +156,7 @@ final class RealtimeLedaController {
         AUDIO_FORMAT|\(format.sampleRate)|\(format.channelCount)|\(format.commonFormat.rawValue)|\(format.isInterleaved)
         """
 
+        print("🎧 Sending Watch audio format:", format.sampleRate, "Hz,", format.channelCount, "channel(s)")
         socketClient.send(text: info)
     }
 
@@ -151,7 +170,11 @@ final class RealtimeLedaController {
 
     private func handle(_ message: LedaMessage) {
         switch message.type {
+        case "REALTIME_SESSION_CREATED":
+            print("🎙️ OpenClaw realtime Talk session created")
+
         case "REALTIME_READY":
+            print("✅ OpenClaw realtime provider ready")
             errorMessage = nil
             if ledaState != .speaking {
                 ledaState = .listening
@@ -159,21 +182,26 @@ final class RealtimeLedaController {
 
         case "REALTIME_TRANSCRIPT":
             latestTranscript = message.text
+            print("📝 Realtime transcript:", message.text)
 
         case "REALTIME_AUDIO_DONE":
+            print("🔊 LEDA realtime audio finished")
             if ledaState == .speaking {
                 ledaState = .listening
             }
 
         case "REALTIME_CLEAR_AUDIO":
+            print("🧹 Clearing queued realtime audio")
             audioPlayer.clear()
             ledaState = .listening
 
         case "LEDA_ERROR":
+            print("❌ Realtime LEDA error:", message.text)
             errorMessage = message.text
             ledaState = .idle
 
         case "REALTIME_CLOSED":
+            print("🔒 OpenClaw realtime session closed")
             if audioManager.isRecording {
                 audioManager.stop()
             }
