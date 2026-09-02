@@ -14,6 +14,7 @@ final class LedaController {
 
     private let audioManager: AudioManager
     private let socketClient: LedaSocketClient
+    private var responseStartedAt: Date?
 
     private(set) var ledaState: LedaState = .idle
     private(set) var socketState: SocketState = .disconnected
@@ -40,6 +41,7 @@ final class LedaController {
         }
 
         errorMessage = nil
+        responseStartedAt = nil
         ledaState = .listening
         connectIfNeeded()
     }
@@ -50,6 +52,7 @@ final class LedaController {
             return
         }
 
+        responseStartedAt = Date()
         ledaState = .thinking
         audioManager.stop()
 
@@ -161,11 +164,18 @@ final class LedaController {
     private func handleLedaMessage(_ message: LedaMessage) {
         switch message.type {
         case "LEDA_REPLY":
+            if let responseStartedAt {
+                let totalMilliseconds = Date().timeIntervalSince(responseStartedAt) * 1000
+                print("[LATENCY] Watch stop → reply received: \(Int(totalMilliseconds)) ms")
+            }
+
+            responseStartedAt = nil
             errorMessage = nil
             ledaState = .speaking
             onReply?(message.text)
 
         case "LEDA_ERROR":
+            responseStartedAt = nil
             errorMessage = message.text
             ledaState = .idle
 
@@ -180,6 +190,8 @@ final class LedaController {
     private func handleSocketFailure(_ error: Error) {
         print("Socket failure reached controller:", error)
 
+        responseStartedAt = nil
+
         if audioManager.isRecording {
             audioManager.stop()
         }
@@ -193,6 +205,7 @@ final class LedaController {
 
     private func handleAudioFailure(_ error: Error) {
         print("Audio error reached controller:", error)
+        responseStartedAt = nil
         errorMessage = "Microphone unavailable. Tap to try again."
         ledaState = .idle
     }
