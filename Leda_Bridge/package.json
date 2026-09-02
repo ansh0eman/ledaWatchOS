@@ -1,17 +1,21 @@
 {
   "name": "leda_bridge",
   "version": "1.0.0",
-  "description": "",
+  "description": "LEDA Apple Watch bridge: Prototype 1 batch voice and Prototype 2 realtime voice",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "prototype1": "node server.js",
+    "realtime": "node realtime-server.mjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@openclaw/gateway-client": "2026.8.1",
+    "@openclaw/gateway-protocol": "2026.8.1",
     "ws": "^8.21.3"
   }
 }
