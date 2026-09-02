@@ -9,13 +9,6 @@ import SwiftUI
 import WatchKit
 import AVFoundation
 
-enum LedaState {
-    case idle
-    case listening
-    case thinking
-    case speaking
-}
-
 struct ClassicAlien: Identifiable {
     let id: String
     let name: String
@@ -36,17 +29,13 @@ struct ClassicAlien: Identifiable {
 }
 
 struct ContentView: View {
-    
-    @State private var ledaState: LedaState = .idle
+
+    @State private var controller = LedaController()
     @State private var rotation = 0.0
     @State private var scale = 1.0
     @State private var audioPlayer: AVAudioPlayer?
-    @State private var audioManager = AudioManager()
-    @State private var socketClient = LedaSocketClient()
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var speechDelegate = SpeechDelegate()
-    @State private var socketState: SocketState = .disconnected
-    @State private var errorMessage: String?
     @State private var isChoosingAlien = false
     @State private var isTransforming = false
     @State private var selectedAlienIndex = 0
@@ -54,9 +43,9 @@ struct ContentView: View {
     private var selectedAlien: ClassicAlien {
         ClassicAlien.originalTen[selectedAlienIndex]
     }
-    
+
     var omnitrixColor: Color {
-        switch ledaState {
+        switch controller.ledaState {
         case .idle:
             return .green
 
@@ -70,13 +59,13 @@ struct ContentView: View {
             return .cyan
         }
     }
-    
+
     func speak(_ text: String) {
         speechSynthesizer.delegate = speechDelegate
 
         speechDelegate.onFinish = {
             Task { @MainActor in
-                ledaState = .idle
+                controller.finishSpeaking()
                 isTransforming = false
                 playSound(named: "ben10-short")
             }
@@ -89,7 +78,7 @@ struct ContentView: View {
 
         speechSynthesizer.speak(utterance)
     }
-    
+
     func playSound(named resourceName: String) {
         guard let url = Bundle.main.url(
             forResource: resourceName,
@@ -109,137 +98,12 @@ struct ContentView: View {
     func playActivationSound() {
         playSound(named: "activation")
     }
-    
-    func startLiveAudio() {
-        audioManager.onFormat = { format in
-            let info = """
-            AUDIO_FORMAT|\(format.sampleRate)|\(format.channelCount)|\(format.commonFormat.rawValue)|\(format.isInterleaved)
-            """
-
-            socketClient.send(text: info) { error in
-                if let error {
-                    print("Format send error:", error)
-                } else {
-                    print("REAL audio format sent")
-                }
-            }
-        }
-
-        audioManager.onAudioData = { data in
-            guard socketClient.state == .connected else {
-                return
-            }
-
-            socketClient.send(data: data) { error in
-                if let error {
-                    print("Audio send error:", error)
-                }
-            }
-        }
-
-        audioManager.onFailure = { error in
-            Task { @MainActor in
-                print("Audio error reached UI:", error)
-                ledaState = .idle
-            }
-        }
-
-        audioManager.start()
-    }
-    
-    func stopLiveAudio() {
-        guard audioManager.isRecording else {
-            print("LEDA microphone was not running")
-            return
-        }
-
-        audioManager.stop()
-
-        socketClient.send(text: "STOP_AUDIO") { error in
-            if let error {
-                print("STOP_AUDIO send error:", error)
-            } else {
-                print("Told Mac to save audio")
-            }
-        }
-    }
-    
-    func connectToLedaBridge() {
-        if socketClient.state == .connected {
-            socketState = .connected
-
-            if ledaState == .listening && !audioManager.isRecording {
-                startLiveAudio()
-            }
-            return
-        }
-
-        errorMessage = nil
-
-        socketClient.onStateChange = { newState in
-            Task { @MainActor in
-                socketState = newState
-
-                if newState == .connected {
-                    print("✅ LEDA bridge connected")
-
-                    if ledaState == .listening && !audioManager.isRecording {
-                        startLiveAudio()
-                    }
-                }
-            }
-        }
-
-        socketClient.onMessage = { message in
-            Task { @MainActor in
-                handleLedaMessage(message)
-            }
-        }
-
-        socketClient.onFailure = { error in
-            Task { @MainActor in
-                handleSocketFailure(error)
-            }
-        }
-
-        socketClient.connect()
-    }
-
-    func handleLedaMessage(_ message: LedaMessage) {
-        if message.type == "LEDA_REPLY" {
-            errorMessage = nil
-            ledaState = .speaking
-            speak(message.text)
-        }
-
-        if message.type == "LEDA_ERROR" {
-            errorMessage = message.text
-            ledaState = .idle
-        }
-
-        print("Type:", message.type)
-        print("LEDA said:", message.text)
-    }
-
-    func handleSocketFailure(_ error: Error) {
-        print("Socket failure reached UI:", error)
-
-        if audioManager.isRecording {
-            audioManager.stop()
-        }
-
-        socketState = .failed
-
-        if ledaState == .listening {
-            ledaState = .idle
-        }
-    }
 
     func selectAlien(at index: Int) {
         selectedAlienIndex = index
         isChoosingAlien = false
         isTransforming = true
-        errorMessage = nil
+        controller.clearError()
 
         WKInterfaceDevice.current().play(.click)
         playSound(named: "alien-confirm")
@@ -250,7 +114,8 @@ struct ContentView: View {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            beginConversation()
+            playSound(named: "ben10-short")
+            controller.beginConversation()
             isTransforming = false
 
             withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
@@ -259,19 +124,8 @@ struct ContentView: View {
         }
     }
 
-    func beginConversation() {
-        guard ledaState == .idle else {
-            return
-        }
-
-        errorMessage = nil
-        ledaState = .listening
-        playSound(named: "ben10-short")
-        connectToLedaBridge()
-    }
-
     func handleOmnitrixTap() {
-        switch ledaState {
+        switch controller.ledaState {
         case .idle:
             withAnimation(.easeInOut(duration: 0.25)) {
                 isChoosingAlien = true
@@ -280,10 +134,9 @@ struct ContentView: View {
             playActivationSound()
 
         case .listening:
-            if audioManager.isRecording {
-                ledaState = .thinking
+            if controller.isRecording {
                 playSound(named: "ben10-short")
-                stopLiveAudio()
+                controller.stopListening()
             }
 
         default:
@@ -292,7 +145,7 @@ struct ContentView: View {
     }
 
     var stateLabel: String {
-        switch ledaState {
+        switch controller.ledaState {
         case .idle:
             return ""
         case .listening:
@@ -303,7 +156,7 @@ struct ContentView: View {
             return "LEDA"
         }
     }
-    
+
     var body: some View {
         ZStack {
             Color.black
@@ -325,7 +178,7 @@ struct ContentView: View {
                         .fill(omnitrixColor)
                         .frame(width: 128, height: 128)
 
-                    if ledaState == .idle && !isTransforming {
+                    if controller.ledaState == .idle && !isTransforming {
                         ZStack {
                             Circle()
                                 .stroke(Color.black.opacity(0.55), lineWidth: 5)
@@ -380,22 +233,29 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
 
-                if socketState == .connecting {
+                if controller.socketState == .connecting {
                     ProgressView()
                         .controlSize(.mini)
                         .offset(y: 78)
-                } else if socketState == .failed {
+                } else if controller.socketState == .failed {
                     Text("Bridge unavailable. Tap to retry.")
                         .font(.system(size: 9))
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                         .offset(y: 78)
-                } else if let errorMessage {
+                } else if let errorMessage = controller.errorMessage {
                     Text(errorMessage)
                         .font(.system(size: 9))
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                         .offset(y: 78)
+                }
+            }
+        }
+        .onAppear {
+            controller.onReply = { text in
+                Task { @MainActor in
+                    speak(text)
                 }
             }
         }
