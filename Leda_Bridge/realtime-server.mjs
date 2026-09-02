@@ -123,15 +123,51 @@ function float32BufferToPcm16_24k(buffer, sourceSampleRate) {
   return output;
 }
 
-async function createRealtimeSession(socket) {
-  await gatewayReady;
+function unexpectedPropertyFrom(error) {
+  const message = error?.message || "";
+  const match = message.match(/unexpected property ['\"]?([^'\"\s]+)['\"]?/i);
+  return match?.[1];
+}
 
-  const result = await gateway.request("talk.session.create", {
+async function createTalkSessionCompat() {
+  const params = {
     mode: "realtime",
     transport: "gateway-relay",
     brain: "agent-consult",
     sessionKey: "main",
-  });
+  };
+
+  const removableFields = new Set(Object.keys(params));
+
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      console.log(
+        `🧩 talk.session.create attempt ${attempt}:`,
+        Object.keys(params).join(", ") || "<no optional fields>",
+      );
+      return await gateway.request("talk.session.create", params);
+    } catch (error) {
+      const property = unexpectedPropertyFrom(error);
+
+      if (!property || !removableFields.has(property)) {
+        throw error;
+      }
+
+      console.log(
+        `↪️ Installed OpenClaw rejected '${property}'; retrying without it`,
+      );
+      delete params[property];
+      removableFields.delete(property);
+    }
+  }
+
+  throw new Error("Could not find a compatible talk.session.create parameter set");
+}
+
+async function createRealtimeSession(socket) {
+  await gatewayReady;
+
+  const result = await createTalkSessionCompat();
 
   const sessionId = result.sessionId || result.relaySessionId;
 
