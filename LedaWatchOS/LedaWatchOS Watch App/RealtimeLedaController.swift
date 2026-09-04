@@ -137,6 +137,12 @@ final class RealtimeLedaController {
 
                 print("🔊 Realtime audio chunk from LEDA:", data.count, "bytes")
                 self.audioPlayer.play(data)
+
+                // Some realtime providers/builds do not emit a reliable audioDone event.
+                // Reschedule a fallback after every audio chunk. While chunks continue,
+                // this task keeps getting cancelled. After the final chunk, it waits for
+                // the queued PCM to finish and then safely reopens the microphone.
+                self.resumeListeningAfterPlayback()
             }
         }
 
