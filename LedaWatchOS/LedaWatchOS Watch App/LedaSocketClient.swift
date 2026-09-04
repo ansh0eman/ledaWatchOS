@@ -50,6 +50,13 @@ final class LedaSocketClient {
         print("Connecting to LEDA bridge:", bridgeURL)
     }
 
+    func disconnect() {
+        print("Disconnecting from LEDA bridge:", bridgeURL)
+        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+        webSocketTask = nil
+        setState(.disconnected)
+    }
+
     func send(text: String, completion: ((Error?) -> Void)? = nil) {
         guard state == .connected else {
             return
@@ -82,6 +89,11 @@ final class LedaSocketClient {
                 receiveNextMessage()
 
             case .failure(let error):
+                if state == .disconnected {
+                    print("🔌 LEDA bridge connection closed")
+                    return
+                }
+
                 print("❌ Receive error:", error)
                 webSocketTask = nil
                 setState(.failed)
