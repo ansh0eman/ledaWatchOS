@@ -29,36 +29,40 @@ struct ClassicAlien: Identifiable {
 }
 
 struct ContentView: View {
+
     @State private var controller = RealtimeLedaController()
+    @State private var rotation = 0.0
+    @State private var scale = 1.0
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isChoosingAlien = false
     @State private var isTransforming = false
-    @State private var isRecharging = false
     @State private var selectedAlienIndex = 0
-    @State private var transformationPulse = false
 
     private var selectedAlien: ClassicAlien {
         ClassicAlien.originalTen[selectedAlienIndex]
     }
 
-    private var accentColor: Color {
-        isRecharging ? .red : Color(red: 0.35, green: 1.0, blue: 0.12)
-    }
-
-    private var statusText: String {
-        if isRecharging { return "RECHARGING" }
-        if isTransforming { return "DNA LOCK" }
-
+    var omnitrixColor: Color {
         switch controller.ledaState {
-        case .idle: return "READY"
-        case .listening: return "LISTENING"
-        case .thinking: return "PROCESSING"
-        case .speaking: return "LEDA"
+        case .idle:
+            return .green
+
+        case .listening:
+            return .white
+
+        case .thinking:
+            return .yellow
+
+        case .speaking:
+            return .cyan
         }
     }
 
     func playSound(named resourceName: String) {
-        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "mp3") else {
+        guard let url = Bundle.main.url(
+            forResource: resourceName,
+            withExtension: "mp3"
+        ) else {
             return
         }
 
@@ -70,71 +74,69 @@ struct ContentView: View {
         }
     }
 
+    func playActivationSound() {
+        playSound(named: "activation")
+    }
+
     func selectAlien(at index: Int) {
         selectedAlienIndex = index
         isChoosingAlien = false
         isTransforming = true
-        transformationPulse = false
         controller.clearError()
 
         WKInterfaceDevice.current().play(.click)
         playSound(named: "alien-confirm")
 
-        withAnimation(.easeOut(duration: 0.16)) {
-            transformationPulse = true
+        withAnimation(.easeInOut(duration: 0.35)) {
+            scale = 1.18
+            rotation += 180
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-            WKInterfaceDevice.current().play(.success)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             playSound(named: "ben10-short")
-
-            withAnimation(.easeInOut(duration: 0.30)) {
-                transformationPulse = false
-            }
-
             controller.beginConversation()
+            isTransforming = false
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                isTransforming = false
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
+                scale = 1.0
             }
         }
     }
 
-    func endConversationWithRecharge() {
-        controller.endConversation()
-        isRecharging = true
-        WKInterfaceDevice.current().play(.failure)
-        playSound(named: "ben10-short")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isRecharging = false
-            }
-        }
-    }
-
-    func handleMainTap() {
-        guard !isRecharging, !isTransforming else { return }
-
+    func handleOmnitrixTap() {
         switch controller.ledaState {
         case .idle:
-            WKInterfaceDevice.current().play(.click)
-            playSound(named: "activation")
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+            withAnimation(.easeInOut(duration: 0.25)) {
                 isChoosingAlien = true
             }
+            WKInterfaceDevice.current().play(.click)
+            playActivationSound()
 
         case .listening, .speaking:
-            endConversationWithRecharge()
+            playSound(named: "ben10-short")
+            controller.endConversation()
 
         case .thinking:
             break
         }
     }
 
+    var stateLabel: String {
+        switch controller.ledaState {
+        case .idle:
+            return ""
+        case .listening:
+            return "LISTENING"
+        case .thinking:
+            return "THINKING"
+        case .speaking:
+            return "LEDA"
+        }
+    }
+
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black
 
             if isChoosingAlien {
                 AlienSelectorView(selectedIndex: $selectedAlienIndex, onDial: {
@@ -142,171 +144,90 @@ struct ContentView: View {
                 }) { index in
                     selectAlien(at: index)
                 }
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else {
-                OmnitrixFaceView(
-                    accentColor: accentColor,
-                    statusText: statusText,
-                    selectedAlien: selectedAlien,
-                    showAlien: controller.ledaState != .idle || isTransforming,
-                    isTransforming: isTransforming,
-                    transformationPulse: transformationPulse,
-                    isSpeaking: controller.ledaState == .speaking,
-                    isListening: controller.ledaState == .listening,
-                    isRecharging: isRecharging
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    handleMainTap()
-                }
-            }
+                ZStack {
+                    Circle()
+                        .stroke(omnitrixColor.opacity(0.35), lineWidth: 14)
+                        .frame(width: 146, height: 146)
 
-            if controller.socketState == .connecting {
+                    Circle()
+                        .fill(omnitrixColor)
+                        .frame(width: 128, height: 128)
+
+                    if controller.ledaState == .idle && !isTransforming {
+                        ZStack {
+                            Circle()
+                                .stroke(Color.black.opacity(0.55), lineWidth: 5)
+                                .frame(width: 104, height: 104)
+
+                            Circle()
+                                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                                .frame(width: 93, height: 93)
+
+                            HourglassShape()
+                                .fill(Color.black)
+                                .overlay {
+                                    HourglassShape()
+                                        .stroke(Color.black.opacity(0.9), lineWidth: 3)
+                                }
+                                .shadow(color: Color.green.opacity(0.85), radius: 7)
+                                .frame(width: 72, height: 82)
+                        }
+                    } else {
+                        ZStack {
+                            DiamondShape()
+                                .fill(Color.black.opacity(0.9))
+                                .frame(width: 88, height: 112)
+                                .rotationEffect(.degrees(rotation))
+
+                            Image(selectedAlien.assetName)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 92, height: 108)
+                                .shadow(color: .black.opacity(0.8), radius: 2, y: 2)
+                        }
+                    }
+                }
+                .scaleEffect(scale)
+                .contentShape(Circle())
+                .onTapGesture {
+                    handleOmnitrixTap()
+                }
+                .transition(.opacity.combined(with: .scale(scale: 1.12)))
+
                 VStack {
                     Spacer()
+
+                    if !stateLabel.isEmpty {
+                        Text(stateLabel)
+                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .foregroundStyle(omnitrixColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+
+                if controller.socketState == .connecting {
                     ProgressView()
                         .controlSize(.mini)
-                        .tint(.green)
-                        .padding(.bottom, 5)
-                }
-            }
-
-            if controller.socketState == .failed || controller.errorMessage != nil {
-                VStack {
-                    Spacer()
-                    Text("CONNECTION ERROR")
-                        .font(.system(size: 8, weight: .black, design: .rounded))
+                        .offset(y: 78)
+                } else if controller.socketState == .failed {
+                    Text("Realtime bridge unavailable. Tap to retry.")
+                        .font(.system(size: 9))
                         .foregroundStyle(.red)
-                        .tracking(1)
-                        .padding(.bottom, 5)
+                        .multilineTextAlignment(.center)
+                        .offset(y: 78)
+                } else if let errorMessage = controller.errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .offset(y: 78)
                 }
             }
-        }
-    }
-}
-
-struct OmnitrixFaceView: View {
-    let accentColor: Color
-    let statusText: String
-    let selectedAlien: ClassicAlien
-    let showAlien: Bool
-    let isTransforming: Bool
-    let transformationPulse: Bool
-    let isSpeaking: Bool
-    let isListening: Bool
-    let isRecharging: Bool
-
-    var body: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width
-            let height = geometry.size.height
-            let faceWidth = width * 0.95
-            let faceHeight = height * 0.90
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(white: 0.74),
-                                Color(white: 0.25),
-                                Color(white: 0.08),
-                                Color(white: 0.48)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: faceWidth, height: faceHeight)
-
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .fill(Color.black)
-                    .frame(width: faceWidth - 10, height: faceHeight - 10)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 26, style: .continuous)
-                            .stroke(accentColor.opacity(0.35), lineWidth: 1)
-                    }
-
-                OmnitrixBezelShape()
-                    .stroke(
-                        accentColor,
-                        style: StrokeStyle(lineWidth: 8, lineCap: .square, lineJoin: .round)
-                    )
-                    .frame(width: faceWidth - 17, height: faceHeight - 17)
-                    .shadow(color: accentColor.opacity(0.55), radius: 5)
-
-                if transformationPulse {
-                    RoundedRectangle(cornerRadius: 25, style: .continuous)
-                        .fill(
-                            RadialGradient(
-                                colors: [accentColor, accentColor.opacity(0.85), .black],
-                                center: .center,
-                                startRadius: 8,
-                                endRadius: max(width, height) * 0.65
-                            )
-                        )
-                        .frame(width: faceWidth - 12, height: faceHeight - 12)
-                        .transition(.opacity)
-                }
-
-                if showAlien && !isRecharging {
-                    Image(selectedAlien.assetName)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: width * 0.48, height: height * 0.60)
-                        .opacity(isTransforming ? 0.95 : 0.48)
-                        .shadow(color: accentColor.opacity(0.8), radius: isTransforming ? 10 : 5)
-                        .scaleEffect(isTransforming ? 1.12 : 1.0)
-                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isTransforming)
-                }
-
-                OmnitrixHourglassStroke()
-                    .stroke(
-                        accentColor,
-                        style: StrokeStyle(
-                            lineWidth: max(8, width * 0.055),
-                            lineCap: .square,
-                            lineJoin: .miter
-                        )
-                    )
-                    .frame(width: faceWidth * 0.73, height: faceHeight * 0.68)
-                    .shadow(color: accentColor.opacity(isSpeaking ? 1.0 : 0.65), radius: isSpeaking ? 9 : 4)
-                    .opacity(showAlien && !isRecharging ? 0.30 : 1.0)
-                    .scaleEffect(isListening ? 1.02 : 1.0)
-                    .animation(
-                        isListening ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : .default,
-                        value: isListening
-                    )
-
-                VStack(spacing: 0) {
-                    HStack {
-                        Circle()
-                            .fill(accentColor)
-                            .frame(width: 6, height: 6)
-                            .shadow(color: accentColor, radius: 3)
-
-                        Spacer()
-
-                        Text(statusText)
-                            .font(.system(size: 8, weight: .black, design: .rounded))
-                            .foregroundStyle(accentColor)
-                            .tracking(1.1)
-                    }
-                    .padding(.horizontal, width * 0.10)
-                    .padding(.top, height * 0.085)
-
-                    Spacer()
-
-                    if showAlien && !isRecharging {
-                        Text(selectedAlien.name)
-                            .font(.system(size: 8, weight: .black, design: .rounded))
-                            .foregroundStyle(accentColor.opacity(0.95))
-                            .tracking(0.8)
-                            .padding(.bottom, height * 0.07)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -317,6 +238,7 @@ struct AlienSelectorView: View {
     let onSelect: (Int) -> Void
 
     @State private var crownPosition = 0.0
+    @State private var isScanning = false
     @FocusState private var isCrownFocused: Bool
 
     private var selectedAlien: ClassicAlien {
@@ -324,139 +246,172 @@ struct AlienSelectorView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
+        VStack(spacing: 1) {
+            Text("SELECT ALIEN")
+                .font(.system(size: 11, weight: .black, design: .rounded))
+                .foregroundStyle(.green)
+                .tracking(1.2)
+
             ZStack {
-                Color.black
+                Circle()
+                    .fill(Color.green.opacity(0.07))
+                    .frame(width: 154, height: 154)
 
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(Color.green.opacity(0.38), lineWidth: 1)
-                    .padding(5)
-
-                OmnitrixBezelShape()
+                Circle()
                     .stroke(
-                        Color(red: 0.35, green: 1.0, blue: 0.12),
-                        style: StrokeStyle(lineWidth: 7, lineCap: .square, lineJoin: .round)
+                        AngularGradient(
+                            colors: [.green, .black, .green, .black, .green],
+                            center: .center
+                        ),
+                        lineWidth: 9
                     )
-                    .padding(11)
-                    .opacity(0.65)
+                    .frame(width: 148, height: 148)
 
-                VStack(spacing: 2) {
-                    HStack {
-                        Text("DNA SELECT")
-                            .font(.system(size: 9, weight: .black, design: .rounded))
-                            .tracking(1.2)
-                            .foregroundStyle(.green)
-
-                        Spacer()
-
-                        Text(String(format: "%02d", selectedIndex + 1))
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.green.opacity(0.7))
+                ZStack {
+                    ForEach(0..<ClassicAlien.originalTen.count, id: \.self) { index in
+                        Capsule()
+                            .fill(index == selectedIndex ? Color.white : Color.green.opacity(0.5))
+                            .frame(
+                                width: index == selectedIndex ? 4 : 2,
+                                height: index == selectedIndex ? 14 : 9
+                            )
+                            .offset(y: -72)
+                            .rotationEffect(
+                                .degrees(
+                                    Double(index) * 36
+                                )
+                            )
                     }
-                    .padding(.horizontal, 18)
+                }
+                .rotationEffect(.degrees(Double(-selectedIndex) * 36))
+                .animation(.spring(response: 0.32, dampingFraction: 0.7), value: selectedIndex)
 
-                    Spacer()
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Color.green.opacity(0.9), Color.green.opacity(0.28), .black],
+                            center: .center,
+                            startRadius: 12,
+                            endRadius: 70
+                        )
+                    )
+                    .frame(width: 128, height: 128)
 
-                    ZStack {
-                        OmnitrixHourglassStroke()
-                            .stroke(Color.green.opacity(0.14), lineWidth: 9)
-                            .frame(width: geometry.size.width * 0.62, height: geometry.size.height * 0.52)
+                DiamondShape()
+                    .fill(Color.black.opacity(0.88))
+                    .frame(width: 87, height: 112)
 
-                        Image(selectedAlien.assetName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: geometry.size.width * 0.46, height: geometry.size.height * 0.50)
-                            .id(selectedAlien.id)
-                            .transition(.opacity.combined(with: .scale(scale: 0.84)))
-                            .shadow(color: .green.opacity(0.85), radius: 7)
+                Image(selectedAlien.assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 112)
+                    .id(selectedAlien.id)
+                    .transition(
+                        .asymmetric(
+                            insertion: .scale(scale: 0.55).combined(with: .opacity),
+                            removal: .scale(scale: 1.35).combined(with: .opacity)
+                        )
+                    )
+                    .shadow(color: .green.opacity(0.65), radius: 5)
+
+                Rectangle()
+                    .fill(Color.green.opacity(0.75))
+                    .frame(width: 94, height: 2)
+                    .blur(radius: 0.5)
+                    .offset(y: isScanning ? 48 : -48)
+                    .animation(
+                        .linear(duration: 1.05).repeatForever(autoreverses: true),
+                        value: isScanning
+                    )
+                    .mask {
+                        Circle()
+                            .frame(width: 116, height: 116)
                     }
 
+                HStack {
+                    Image(systemName: "chevron.left")
                     Spacer()
-
-                    Text(selectedAlien.name)
-                        .font(.system(size: 10, weight: .black, design: .rounded))
-                        .foregroundStyle(.green)
-                        .tracking(0.9)
-
-                    Text("CROWN TO SCAN  •  TAP TO LOCK")
-                        .font(.system(size: 6.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(.green.opacity(0.65))
-                        .tracking(0.35)
-                        .padding(.bottom, 4)
+                    Image(systemName: "chevron.right")
                 }
+                .font(.system(size: 10, weight: .black))
+                .foregroundStyle(.green.opacity(0.8))
+                .frame(width: 170)
             }
-            .contentShape(Rectangle())
-            .focusable()
-            .focused($isCrownFocused)
-            .digitalCrownRotation(
-                $crownPosition,
-                from: 0,
-                through: Double(ClassicAlien.originalTen.count - 1),
-                by: 1,
-                sensitivity: .medium,
-                isContinuous: true,
-                isHapticFeedbackEnabled: true
-            )
-            .onChange(of: crownPosition) { _, newValue in
-                let newIndex = Int(newValue.rounded())
-                guard newIndex != selectedIndex,
-                      ClassicAlien.originalTen.indices.contains(newIndex) else {
-                    return
-                }
 
-                withAnimation(.spring(response: 0.22, dampingFraction: 0.72)) {
-                    selectedIndex = newIndex
-                }
-                onDial()
+            Text(selectedAlien.name)
+                .font(.system(size: 11, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text("TURN CROWN  •  TAP TO SELECT")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(.green.opacity(0.78))
+                .tracking(0.35)
+        }
+        .contentShape(Rectangle())
+        .focusable()
+        .focused($isCrownFocused)
+        .digitalCrownRotation(
+            $crownPosition,
+            from: 0,
+            through: Double(ClassicAlien.originalTen.count - 1),
+            by: 1,
+            sensitivity: .medium,
+            isContinuous: true,
+            isHapticFeedbackEnabled: true
+        )
+        .onChange(of: crownPosition) { _, newValue in
+            let newIndex = Int(newValue.rounded())
+
+            guard newIndex != selectedIndex,
+                  ClassicAlien.originalTen.indices.contains(newIndex) else {
+                return
             }
-            .onTapGesture {
-                onSelect(selectedIndex)
+
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.68)) {
+                selectedIndex = newIndex
             }
-            .onAppear {
-                crownPosition = Double(selectedIndex)
-                isCrownFocused = true
-            }
+            onDial()
+        }
+        .onTapGesture {
+            onSelect(selectedIndex)
+        }
+        .onAppear {
+            crownPosition = Double(selectedIndex)
+            isCrownFocused = true
+            isScanning = true
         }
     }
 }
 
-struct OmnitrixHourglassStroke: Shape {
+struct HourglassShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
 
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.midY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
         path.addLine(to: CGPoint(x: rect.midX, y: rect.midY))
+
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.midY))
+
+        path.closeSubpath()
 
         return path
     }
 }
 
-struct OmnitrixBezelShape: Shape {
+struct DiamondShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let x = rect.width * 0.22
-        let y = rect.height * 0.22
 
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY + y))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.minX + x, y: rect.minY))
-
-        path.move(to: CGPoint(x: rect.maxX - x, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + y))
-
-        path.move(to: CGPoint(x: rect.maxX, y: rect.maxY - y))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX - x, y: rect.maxY))
-
-        path.move(to: CGPoint(x: rect.minX + x, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - y))
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.closeSubpath()
 
         return path
     }
