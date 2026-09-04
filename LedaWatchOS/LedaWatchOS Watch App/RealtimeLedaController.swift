@@ -64,8 +64,9 @@ final class RealtimeLedaController {
             audioManager.stop()
         }
 
-        socketClient.send(text: "CLOSE_REALTIME")
         audioPlayer.stop()
+        socketClient.disconnect()
+        socketState = .disconnected
         ledaState = .idle
     }
 
@@ -206,6 +207,8 @@ final class RealtimeLedaController {
                 audioManager.stop()
             }
             audioPlayer.stop()
+            socketClient.disconnect()
+            socketState = .disconnected
             ledaState = .idle
 
         default:
