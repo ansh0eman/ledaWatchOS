@@ -55,7 +55,7 @@ function beginTurn(session, text) {
   };
 
   console.log("\n[LATENCY] ---- realtime turn started ----");
-  console.log(`[LATENCY] user final received: 0 ms`);
+  console.log("[LATENCY] user final received: 0 ms");
   console.log(`[LATENCY] user text: ${text || "<empty>"}`);
 }
 
@@ -316,13 +316,16 @@ function forwardTalkEvent(payload) {
       }
 
       case "audioDone":
-      case "mark":
         if (session.turn?.userFinalAtMs && session.turn.audioDoneAtMs == null) {
           session.turn.audioDoneAtMs = nowMs();
           logTurnLatency(session, "audio stream done");
           console.log("[LATENCY] ---- realtime turn complete ----\n");
         }
         sendJson(socket, "REALTIME_AUDIO_DONE");
+        break;
+
+      case "mark":
+        console.log(`[LATENCY] provider mark: ${payload.name || payload.mark || "unnamed"}`);
         break;
 
       case "clear":
