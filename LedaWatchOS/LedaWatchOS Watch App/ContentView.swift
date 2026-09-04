@@ -26,16 +26,34 @@ struct ClassicAlien: Identifiable {
         ClassicAlien(id: "upgrade", name: "UPGRADE", assetName: "AlienUpgrade"),
         ClassicAlien(id: "ghostfreak", name: "GHOSTFREAK", assetName: "AlienGhostfreak"),
     ]
+
+    var healthMetric: HealthMetric {
+        switch id {
+        case "heatblast": return .activeEnergy
+        case "wildmutt": return .steps
+        case "diamondhead": return .restingHeartRate
+        case "xlr8": return .heartRate
+        case "grey-matter": return .sleep
+        case "four-arms": return .workoutMinutes
+        case "stinkfly": return .respiratoryRate
+        case "ripjaws": return .oxygenSaturation
+        case "upgrade": return .heartRateVariability
+        case "ghostfreak": return .walkingHeartRate
+        default: return .steps
+        }
+    }
 }
 
 struct ContentView: View {
 
     @State private var controller = RealtimeLedaController()
+    @State private var healthManager = HealthDashboardManager()
     @State private var rotation = 0.0
     @State private var scale = 1.0
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isChoosingAlien = false
     @State private var isTransforming = false
+    @State private var isShowingHealthDashboard = false
     @State private var selectedAlienIndex = 0
 
     private var selectedAlien: ClassicAlien {
@@ -46,13 +64,10 @@ struct ContentView: View {
         switch controller.ledaState {
         case .idle:
             return .green
-
         case .listening:
             return .white
-
         case .thinking:
             return .yellow
-
         case .speaking:
             return .cyan
         }
@@ -82,22 +97,22 @@ struct ContentView: View {
         selectedAlienIndex = index
         isChoosingAlien = false
         isTransforming = true
+        isShowingHealthDashboard = true
         controller.clearError()
 
         WKInterfaceDevice.current().play(.click)
         playSound(named: "alien-confirm")
 
-        withAnimation(.easeInOut(duration: 0.35)) {
-            scale = 1.18
+        withAnimation(.easeInOut(duration: 0.28)) {
+            scale = 1.12
             rotation += 180
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            playSound(named: "ben10-short")
-            controller.beginConversation()
-            isTransforming = false
+        healthManager.requestAccessAndLoad(selectedAlien.healthMetric)
 
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            isTransforming = false
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
                 scale = 1.0
             }
         }
@@ -116,6 +131,20 @@ struct ContentView: View {
             playSound(named: "ben10-short")
             controller.endConversation()
 
+        case .thinking:
+            break
+        }
+    }
+
+    func toggleLedaVoice() {
+        switch controller.ledaState {
+        case .idle:
+            controller.clearError()
+            playSound(named: "ben10-short")
+            controller.beginConversation()
+        case .listening, .speaking:
+            playSound(named: "ben10-short")
+            controller.endConversation()
         case .thinking:
             break
         }
@@ -145,6 +174,29 @@ struct ContentView: View {
                     selectAlien(at: index)
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            } else if isShowingHealthDashboard {
+                HealthAlienDashboardView(
+                    alien: selectedAlien,
+                    healthManager: healthManager,
+                    ledaState: controller.ledaState,
+                    socketState: controller.socketState,
+                    onBack: {
+                        if controller.ledaState != .idle {
+                            controller.endConversation()
+                        }
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isShowingHealthDashboard = false
+                            isChoosingAlien = true
+                        }
+                    },
+                    onRefresh: {
+                        healthManager.load(selectedAlien.healthMetric)
+                    },
+                    onToggleLeda: {
+                        toggleLedaVoice()
+                    }
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
                 ZStack {
                     Circle()
@@ -232,6 +284,149 @@ struct ContentView: View {
     }
 }
 
+struct HealthAlienDashboardView: View {
+    let alien: ClassicAlien
+    let healthManager: HealthDashboardManager
+    let ledaState: LedaState
+    let socketState: SocketState
+    let onBack: () -> Void
+    let onRefresh: () -> Void
+    let onToggleLeda: () -> Void
+
+    private var voiceColor: Color {
+        switch ledaState {
+        case .idle: return .green
+        case .listening: return .white
+        case .thinking: return .yellow
+        case .speaking: return .cyan
+        }
+    }
+
+    private var voiceLabel: String {
+        switch ledaState {
+        case .idle: return "LEDA"
+        case .listening: return "LISTEN"
+        case .thinking: return "THINK"
+        case .speaking: return "SPEAK"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 3) {
+            HStack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .black))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.green)
+
+                Spacer()
+
+                VStack(spacing: 0) {
+                    Text(alien.name)
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .foregroundStyle(.green)
+                    Text(alien.healthMetric.title)
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+
+                Spacer()
+
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 9, weight: .black))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.green)
+            }
+            .padding(.horizontal, 8)
+
+            ZStack {
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [.green.opacity(0.38), .green.opacity(0.07), .black],
+                            center: .center,
+                            startRadius: 8,
+                            endRadius: 64
+                        )
+                    )
+                    .frame(width: 120, height: 120)
+
+                Image(alien.assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 72, height: 78)
+                    .opacity(0.32)
+                    .shadow(color: .green.opacity(0.65), radius: 5)
+
+                VStack(spacing: 0) {
+                    if healthManager.isLoading {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(.green)
+                        Text("SYNCING")
+                            .font(.system(size: 7, weight: .black, design: .rounded))
+                            .foregroundStyle(.green)
+                            .padding(.top, 3)
+                    } else if let snapshot = healthManager.snapshot {
+                        Text(snapshot.value)
+                            .font(.system(size: 24, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                            .minimumScaleFactor(0.55)
+                            .lineLimit(1)
+
+                        Text(snapshot.unit)
+                            .font(.system(size: 8, weight: .black, design: .rounded))
+                            .foregroundStyle(.green)
+
+                        Text(snapshot.detail)
+                            .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                            .padding(.top, 2)
+                    } else {
+                        Text("NO DATA")
+                            .font(.system(size: 16, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(healthManager.errorMessage ?? alien.healthMetric.shortDescription)
+                            .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(.green.opacity(0.78))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(3)
+                            .frame(width: 92)
+                    }
+                }
+            }
+
+            Text(alien.healthMetric.shortDescription)
+                .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.55))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Button(action: onToggleLeda) {
+                HStack(spacing: 4) {
+                    Image(systemName: ledaState == .idle ? "waveform.circle.fill" : "waveform")
+                    Text(voiceLabel)
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                }
+                .foregroundStyle(voiceColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.06), in: Capsule())
+                .overlay(Capsule().stroke(voiceColor.opacity(0.45), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(socketState == .connecting || ledaState == .thinking)
+            .padding(.horizontal, 18)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 struct AlienSelectorView: View {
     @Binding var selectedIndex: Int
     let onDial: () -> Void
@@ -276,11 +471,7 @@ struct AlienSelectorView: View {
                                 height: index == selectedIndex ? 14 : 9
                             )
                             .offset(y: -72)
-                            .rotationEffect(
-                                .degrees(
-                                    Double(index) * 36
-                                )
-                            )
+                            .rotationEffect(.degrees(Double(index) * 36))
                     }
                 }
                 .rotationEffect(.degrees(Double(-selectedIndex) * 36))
