@@ -14,6 +14,7 @@ final class RealtimeAudioPlayer {
     )!
 
     private var isPrepared = false
+    private var queuedUntil = Date()
 
     func play(_ data: Data) {
         guard !data.isEmpty else {
@@ -53,13 +54,23 @@ final class RealtimeAudioPlayer {
 
         playerNode.scheduleBuffer(buffer)
 
+        let now = Date()
+        let chunkDuration = TimeInterval(frameCount) / streamFormat.sampleRate
+        let queueStart = max(now, queuedUntil)
+        queuedUntil = queueStart.addingTimeInterval(chunkDuration)
+
         if !playerNode.isPlaying {
             playerNode.play()
         }
     }
 
+    func remainingPlaybackDuration() -> TimeInterval {
+        max(0, queuedUntil.timeIntervalSinceNow)
+    }
+
     func clear() {
         playerNode.stop()
+        queuedUntil = Date()
 
         if audioEngine.isRunning {
             playerNode.play()
@@ -69,6 +80,7 @@ final class RealtimeAudioPlayer {
     func stop() {
         playerNode.stop()
         audioEngine.stop()
+        queuedUntil = Date()
         isPrepared = false
     }
 
