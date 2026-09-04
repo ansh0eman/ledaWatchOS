@@ -29,6 +29,36 @@ function createGatewayReadyPromise() {
 
 const watchSessions = new Map();
 
+function nowMs() {
+  return performance.now();
+}
+
+function elapsedMs(startMs) {
+  return startMs == null ? null : Math.round(nowMs() - startMs);
+}
+
+function logTurnLatency(session, label) {
+  if (!session?.turn?.userFinalAtMs) {
+    return;
+  }
+
+  console.log(`[LATENCY] ${label}: ${elapsedMs(session.turn.userFinalAtMs)} ms after user final`);
+}
+
+function beginTurn(session, text) {
+  session.turn = {
+    userFinalAtMs: nowMs(),
+    firstAssistantTranscriptAtMs: null,
+    assistantFinalAtMs: null,
+    firstAudioAtMs: null,
+    audioDoneAtMs: null,
+  };
+
+  console.log("\n[LATENCY] ---- realtime turn started ----");
+  console.log(`[LATENCY] user final received: 0 ms`);
+  console.log(`[LATENCY] user text: ${text || "<empty>"}`);
+}
+
 const gateway = new GatewayClient({
   url: gatewayUrl,
   clientName: "gateway-client",
@@ -165,6 +195,7 @@ async function createTalkSessionCompat() {
 }
 
 async function createRealtimeSession(socket) {
+  const sessionStartMs = nowMs();
   await gatewayReady;
 
   const result = await createTalkSessionCompat();
@@ -183,8 +214,10 @@ async function createRealtimeSession(socket) {
 
   session.sessionId = sessionId;
   session.outputSampleRate = result.audio?.outputSampleRateHz || TARGET_SAMPLE_RATE;
+  session.sessionCreatedAtMs = nowMs();
 
   console.log("🎙️ Realtime Talk session created:", sessionId);
+  console.log(`[LATENCY] Talk session create: ${Math.round(session.sessionCreatedAtMs - sessionStartMs)} ms`);
   console.log("🎧 OpenClaw audio contract:", result.audio);
 
   sendJson(socket, "REALTIME_SESSION_CREATED", "", {
@@ -234,23 +267,49 @@ function forwardTalkEvent(payload) {
     switch (payload.type) {
       case "ready":
         console.log("✅ Realtime provider ready");
+        if (session.sessionCreatedAtMs != null) {
+          console.log(`[LATENCY] Provider ready: ${elapsedMs(session.sessionCreatedAtMs)} ms after Talk session created`);
+        }
         sendJson(socket, "REALTIME_READY");
         break;
 
-      case "transcript":
-        console.log(
-          `[${payload.role || "unknown"}${payload.final ? " final" : ""}]`,
-          payload.text || "",
-        );
-        sendJson(socket, "REALTIME_TRANSCRIPT", payload.text || "", {
+      case "transcript": {
+        const role = payload.role || "unknown";
+        const text = payload.text || "";
+        const isFinal = Boolean(payload.final);
+
+        console.log(`[${role}${isFinal ? " final" : ""}]`, text);
+
+        if (role === "user" && isFinal) {
+          beginTurn(session, text);
+        }
+
+        if (role === "assistant" && session.turn?.userFinalAtMs) {
+          if (session.turn.firstAssistantTranscriptAtMs == null) {
+            session.turn.firstAssistantTranscriptAtMs = nowMs();
+            logTurnLatency(session, "first assistant transcript");
+          }
+
+          if (isFinal && session.turn.assistantFinalAtMs == null) {
+            session.turn.assistantFinalAtMs = nowMs();
+            logTurnLatency(session, "assistant final transcript");
+          }
+        }
+
+        sendJson(socket, "REALTIME_TRANSCRIPT", text, {
           role: payload.role,
-          final: Boolean(payload.final),
+          final: isFinal,
         });
         break;
+      }
 
       case "audio": {
         const audio = Buffer.from(payload.audioBase64 || "", "base64");
         if (audio.length > 0) {
+          if (session.turn?.userFinalAtMs && session.turn.firstAudioAtMs == null) {
+            session.turn.firstAudioAtMs = nowMs();
+            logTurnLatency(session, "FIRST AUDIO from provider");
+          }
           socket.send(audio);
         }
         break;
@@ -258,19 +317,32 @@ function forwardTalkEvent(payload) {
 
       case "audioDone":
       case "mark":
+        if (session.turn?.userFinalAtMs && session.turn.audioDoneAtMs == null) {
+          session.turn.audioDoneAtMs = nowMs();
+          logTurnLatency(session, "audio stream done");
+          console.log("[LATENCY] ---- realtime turn complete ----\n");
+        }
         sendJson(socket, "REALTIME_AUDIO_DONE");
         break;
 
       case "clear":
+        console.log(`[LATENCY] provider clear: ${payload.reason || "no reason"}`);
         sendJson(socket, "REALTIME_CLEAR_AUDIO", payload.reason || "");
         break;
 
       case "error":
         console.error("Realtime Talk error:", payload.message);
+        if (session.turn?.userFinalAtMs) {
+          logTurnLatency(session, "ERROR");
+        }
         sendJson(socket, "LEDA_ERROR", payload.message || "Realtime Talk failed");
         break;
 
       case "close":
+        console.log(`🔒 Realtime Talk closed: ${payload.reason || "no reason"}`);
+        if (session.turn?.userFinalAtMs) {
+          logTurnLatency(session, "session closed");
+        }
         sendJson(socket, "REALTIME_CLOSED", payload.reason || "");
         session.sessionId = null;
         break;
@@ -289,6 +361,8 @@ watchServer.on("connection", (socket) => {
     inputSampleRate: 44100,
     channels: 1,
     outputSampleRate: TARGET_SAMPLE_RATE,
+    sessionCreatedAtMs: null,
+    turn: null,
   });
 
   sendJson(socket, "CONNECTED");
@@ -336,8 +410,8 @@ watchServer.on("connection", (socket) => {
     }
   });
 
-  socket.on("close", () => {
-    console.log("⌚ Apple Watch disconnected from Prototype 2 bridge");
+  socket.on("close", (code, reason) => {
+    console.log(`⌚ Apple Watch disconnected from Prototype 2 bridge (${code}): ${reason || "no reason"}`);
 
     const session = watchSessions.get(socket);
     watchSessions.delete(socket);
