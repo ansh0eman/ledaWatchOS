@@ -9,6 +9,9 @@ final class RealtimeLedaController {
     private let socketClient: LedaSocketClient
     private let audioPlayer: RealtimeAudioPlayer
 
+    @ObservationIgnored
+    private var resumeListeningTask: Task<Void, Never>?
+
     private(set) var ledaState: LedaState = .idle
     private(set) var socketState: SocketState = .disconnected
     private(set) var errorMessage: String?
@@ -43,6 +46,8 @@ final class RealtimeLedaController {
 
         print("🎙️ Prototype 2 beginConversation()")
 
+        resumeListeningTask?.cancel()
+        resumeListeningTask = nil
         errorMessage = nil
         latestTranscript = ""
         ledaState = .listening
@@ -59,6 +64,9 @@ final class RealtimeLedaController {
 
     func endConversation() {
         print("🛑 Ending Prototype 2 realtime conversation")
+
+        resumeListeningTask?.cancel()
+        resumeListeningTask = nil
 
         if audioManager.isRecording {
             audioManager.stop()
@@ -116,8 +124,18 @@ final class RealtimeLedaController {
                     return
                 }
 
+                self.resumeListeningTask?.cancel()
+                self.resumeListeningTask = nil
+
+                if self.ledaState != .speaking {
+                    print("🔇 Pausing microphone while LEDA speaks")
+                    if self.audioManager.isRecording {
+                        self.audioManager.stop()
+                    }
+                    self.ledaState = .speaking
+                }
+
                 print("🔊 Realtime audio chunk from LEDA:", data.count, "bytes")
-                self.ledaState = .speaking
                 self.audioPlayer.play(data)
             }
         }
@@ -129,6 +147,9 @@ final class RealtimeLedaController {
                 }
 
                 print("❌ Prototype 2 bridge failure:", error)
+
+                self.resumeListeningTask?.cancel()
+                self.resumeListeningTask = nil
 
                 if self.audioManager.isRecording {
                     self.audioManager.stop()
@@ -169,6 +190,33 @@ final class RealtimeLedaController {
         socketClient.send(data: data)
     }
 
+    private func resumeListeningAfterPlayback() {
+        resumeListeningTask?.cancel()
+
+        let delay = audioPlayer.remainingPlaybackDuration() + 0.15
+        print(String(format: "⏳ Waiting %.2fs for LEDA audio to finish before reopening mic", delay))
+
+        resumeListeningTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            let nanoseconds = UInt64(max(0, delay) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+
+            guard !Task.isCancelled,
+                  self.ledaState == .speaking,
+                  self.socketClient.state == .connected else {
+                return
+            }
+
+            print("🎤 LEDA finished speaking; reopening microphone")
+            self.ledaState = .listening
+            self.startAudioIfNeeded()
+            self.resumeListeningTask = nil
+        }
+    }
+
     private func handle(_ message: LedaMessage) {
         switch message.type {
         case "REALTIME_SESSION_CREATED":
@@ -186,23 +234,32 @@ final class RealtimeLedaController {
             print("📝 Realtime transcript:", message.text)
 
         case "REALTIME_AUDIO_DONE":
-            print("🔊 LEDA realtime audio finished")
+            print("🔊 LEDA realtime audio stream finished")
             if ledaState == .speaking {
-                ledaState = .listening
+                resumeListeningAfterPlayback()
             }
 
         case "REALTIME_CLEAR_AUDIO":
+            if ledaState == .speaking {
+                print("🛡️ Ignoring realtime clear while half-duplex playback is active")
+                break
+            }
+
             print("🧹 Clearing queued realtime audio")
             audioPlayer.clear()
             ledaState = .listening
 
         case "LEDA_ERROR":
             print("❌ Realtime LEDA error:", message.text)
+            resumeListeningTask?.cancel()
+            resumeListeningTask = nil
             errorMessage = message.text
             ledaState = .idle
 
         case "REALTIME_CLOSED":
             print("🔒 OpenClaw realtime session closed")
+            resumeListeningTask?.cancel()
+            resumeListeningTask = nil
             if audioManager.isRecording {
                 audioManager.stop()
             }
