@@ -6,6 +6,7 @@ xcuserdata/
 # Build output
 DerivedData/
 build/
+node_modules/
 
 # Swift Package Manager
 .swiftpm/
@@ -13,3 +14,7 @@ build/
 # Secrets
 .env
 *.key
+
+# Runtime capture artifacts
+audio.txt
+audio.wav

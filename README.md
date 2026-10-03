@@ -1,74 +1,93 @@
 # LEDA for watchOS
 
-A watch-first voice assistant experiment built around a custom Omnitrix-inspired interface, real-time microphone streaming, and spoken AI responses.
+A watch-first realtime voice assistant prototype built with SwiftUI, AVFoundation, WebSockets, and a Node.js audio bridge.
 
-The project explores what it takes to make a conversational assistant feel native on Apple Watch rather than like a phone app squeezed onto a smaller screen.
+LEDA explores a specific product question: what changes when the watch is the primary interface for an assistant, rather than a miniature companion screen? The interaction combines an Omnitrix-inspired dial, microphone capture, streamed speech, audio playback, and explicit conversation state on the wrist.
 
-## What it does
+## System design
 
-- Presents a custom watchOS interface with activation, selection, and listening states
-- Captures microphone audio directly on Apple Watch
-- Streams audio over WebSockets to a lightweight Node.js bridge
-- Plays streamed assistant audio back on the watch
-- Coordinates UI, audio, socket, and conversation state in Swift
-- Includes sound cues and animated interaction states for a more physical, device-like feel
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant W as Apple Watch
+    participant B as Node.js bridge
+    participant G as Realtime gateway
 
-## Architecture
-
-```text
-Apple Watch
-  │
-  │ microphone audio
-  ▼
-AVAudioEngine / AVFoundation
-  │
-  │ PCM over WebSocket
-  ▼
-Node.js realtime bridge
-  │
-  │ realtime AI session
-  ▼
-Assistant response audio
-  │
-  ▼
-WebSocket stream
-  │
-  ▼
-Apple Watch playback
+    U->>W: Activate and speak
+    W->>W: Capture Float32 audio
+    W->>B: WebSocket audio frames
+    B->>B: Resample and encode PCM16 / 24 kHz
+    B->>G: Append realtime audio
+    G-->>B: Transcript and audio events
+    B-->>W: JSON state + binary audio
+    W-->>U: Streamed playback and UI feedback
 ```
 
-## Tech
+The watch and bridge use a deliberately small protocol: JSON control messages communicate readiness, transcripts, completion, and errors; binary WebSocket frames carry audio. `RealtimeLedaController` owns the turn lifecycle so recording pauses during playback and resumes only after the final audio chunk.
 
-**watchOS:** Swift, SwiftUI, WatchKit, AVFoundation, AVAudioEngine  
-**Realtime transport:** WebSockets  
-**Bridge:** Node.js  
-**Audio:** live microphone capture + streamed playback
+## Engineering highlights
 
-## Repository structure
+- Direct microphone capture with `AVAudioEngine` and watchOS audio-session handling
+- Realtime WebSocket transport with distinct control and binary audio messages
+- Float32-to-PCM16 conversion plus linear resampling to a 24 kHz gateway contract
+- Streamed playback buffering on the watch
+- Explicit activation, connecting, listening, thinking, speaking, and error states
+- Compatibility fallback when gateway versions reject optional session fields
+- Turn-level latency instrumentation for transcript and first-audio milestones
+
+## Repository map
 
 ```text
 LedaWatchOS/
 ├── LedaWatchOS Watch App/
-│   ├── ContentView.swift
-│   ├── LedaController.swift
-│   ├── LedaSocketClient.swift
-│   ├── RealtimeLedaController.swift
-│   ├── RealtimeAudioPlayer.swift
-│   └── AudioManager.swift
+│   ├── ContentView.swift              interface and interaction states
+│   ├── RealtimeLedaController.swift   conversation lifecycle
+│   ├── AudioManager.swift             microphone capture
+│   ├── LedaSocketClient.swift         Watch-to-bridge transport
+│   └── RealtimeAudioPlayer.swift      streamed playback
 └── LedaWatchOS.xcodeproj/
 
 Leda_Bridge/
-├── realtime-server.mjs
-├── server.js
-└── package.json
+├── realtime-server.mjs                realtime audio gateway
+├── server.js                          earlier batch prototype
+├── package.json
+└── package-lock.json
 ```
 
-## Why I built it
+## Run the prototype
 
-Most voice assistants treat the watch as a secondary surface. I wanted to prototype the opposite: a small wearable interface where voice, sound, animation, and low-latency feedback are the primary interaction model.
+### 1. Configure the bridge
 
-The project has been useful for learning the lower-level details behind realtime audio systems on Apple platforms: audio-session configuration, input taps, PCM streaming, WebSocket state, playback buffering, and coordinating asynchronous UI state.
+Use environment variables; do not place gateway credentials in source control.
 
-## Status
+```bash
+cd Leda_Bridge
+npm ci
+export OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+export OPENCLAW_GATEWAY_TOKEN=your_local_token
+npm run realtime
+```
 
-Active prototype. The core watch-to-bridge realtime path is implemented; the project is still evolving as I refine reliability, latency, and the interaction model.
+The bridge listens on port `8766` by default. Override it with `LEDA_REALTIME_BRIDGE_PORT`.
+
+### 2. Configure the watch target
+
+Open `LedaWatchOS/LedaWatchOS.xcodeproj` in Xcode. The Watch app must connect to a bridge hostname reachable from the selected Simulator or device. For a physical Watch, use a local-network hostname or address and ensure both devices can reach it.
+
+### 3. Build and run
+
+Select the Watch app target, choose a Watch Simulator, and run from Xcode. Start the bridge before activating a realtime session.
+
+## Design decisions
+
+- **Binary audio frames:** avoids base64 expansion on the watch-to-bridge hot path.
+- **Bridge-side resampling:** keeps gateway-specific audio contracts out of the watch UI layer.
+- **Recording/playback coordination:** prevents the assistant's output from being captured as new user input.
+- **Protocol errors surfaced to UI:** unavailable services produce a visible error state instead of fake playback.
+- **Gateway credentials stay on the Mac:** the Watch client never receives backend credentials.
+
+## Verification and boundaries
+
+The Swift target and bridge syntax have been exercised during development, and the repository implements the full Watch-to-bridge code path. Simulator/build success is not the same as a production-ready wearable assistant: physical-device latency, microphone and speaker behavior, network transitions, accessibility, long-session reliability, and deployment security still require dedicated validation.
+
+This is an active prototype. It is intentionally presented as engineering exploration, not a shipped App Store product.
